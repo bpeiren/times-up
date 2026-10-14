@@ -13,10 +13,10 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW,
     GetSystemMetrics, GetWindowLongPtrW, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSG,
-    PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-    WM_DESTROY, WM_NCDESTROY, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, WM_DESTROY, WM_NCDESTROY, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::w;
 
@@ -30,9 +30,17 @@ pub const DEFAULT_WIDTH: u32 = 600;
 pub const DEFAULT_HEIGHT: u32 = 60;
 const TOP_MARGIN: i32 = 20;
 
-/// What the window shows. Called once a second (and whenever the window asks for a redraw).
+/// What the window shows. Called on every tick of the timer.
 pub trait Handler {
-    fn draw(&mut self, canvas: &mut Canvas);
+    /// Paint the canvas (already cleared). Return `false` when there is nothing to show; the
+    /// window then hides itself until a later tick returns `true`.
+    fn draw(&mut self, canvas: &mut Canvas) -> bool;
+
+    /// Milliseconds until the next tick. The app can aim just past a second boundary so a
+    /// countdown never repeats or skips a second.
+    fn next_tick_ms(&self) -> u32 {
+        TICK_MS
+    }
 }
 
 /// Where and how large (device pixels) the window starts; `None` means the default position.
@@ -48,13 +56,28 @@ struct State {
     surface: Surface,
     canvas: Canvas,
     handler: Box<dyn Handler>,
+    shown: bool,
 }
 
 impl State {
+    /// Draw, show or hide the window accordingly, and arm the timer for the next tick.
     fn redraw(&mut self, hwnd: HWND) {
         self.canvas.clear();
-        self.handler.draw(&mut self.canvas);
-        let _ = self.surface.present(hwnd, &self.canvas);
+        let visible = self.handler.draw(&mut self.canvas);
+        // SAFETY: calls on our own window from its own thread.
+        unsafe {
+            if visible {
+                let _ = self.surface.present(hwnd, &self.canvas);
+                if !self.shown {
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    self.shown = true;
+                }
+            } else if self.shown {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                self.shown = false;
+            }
+            SetTimer(Some(hwnd), TIMER_ID, self.handler.next_tick_ms(), None);
+        }
     }
 }
 
@@ -82,6 +105,7 @@ pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core:
         canvas: Canvas::new(placement.width, placement.height),
         surface,
         handler,
+        shown: false,
     });
     // SAFETY: standard window creation; see the ownership note below.
     unsafe {
@@ -122,9 +146,7 @@ pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core:
         // procedure sees a null pointer and just uses the default handling.
         let raw = Box::into_raw(state);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
-        (*raw).redraw(hwnd);
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(Some(hwnd), TIMER_ID, TICK_MS, None);
+        (*raw).redraw(hwnd); // shows the window (or not) and starts the timer
         Ok(hwnd)
     }
 }
@@ -164,17 +186,20 @@ unsafe extern "system" fn window_proc(
                 if let Some(state) = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State).as_mut()
                 {
                     state.redraw(hwnd);
+                    if state.shown {
+                        // Other topmost windows can push us down; stay on top without taking
+                        // focus.
+                        let _ = SetWindowPos(
+                            hwnd,
+                            Some(HWND_TOPMOST),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
                 }
-                // Other topmost windows can push us down; stay on top without taking focus.
-                let _ = SetWindowPos(
-                    hwnd,
-                    Some(HWND_TOPMOST),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
                 return LRESULT(0);
             }
             WM_DESTROY => {
@@ -218,7 +243,7 @@ mod tests {
     }
 
     impl Handler for Counting {
-        fn draw(&mut self, canvas: &mut Canvas) {
+        fn draw(&mut self, canvas: &mut Canvas) -> bool {
             self.draws.set(self.draws.get() + 1);
             canvas.fill_rounded_rect(
                 RectF::new(0.0, 0.0, canvas.width() as f32, canvas.height() as f32),
@@ -226,6 +251,23 @@ mod tests {
                 Rgba::rgb(0, 200, 0),
                 None,
             );
+            true
+        }
+    }
+
+    /// A handler whose visibility and next tick the test controls.
+    struct Switch {
+        visible: Rc<Cell<bool>>,
+        tick_ms: Rc<Cell<u32>>,
+    }
+
+    impl Handler for Switch {
+        fn draw(&mut self, _: &mut Canvas) -> bool {
+            self.visible.get()
+        }
+
+        fn next_tick_ms(&self) -> u32 {
+            self.tick_ms.get()
         }
     }
 
@@ -295,6 +337,45 @@ mod tests {
     }
 
     #[test]
+    fn window_hides_and_shows_with_the_handler() {
+        enable_dpi_awareness();
+        let visible = Rc::new(Cell::new(false));
+        let tick_ms = Rc::new(Cell::new(1000));
+        let hwnd = create(
+            Placement {
+                x: Some(10),
+                y: Some(10),
+                width: 100,
+                height: 20,
+            },
+            Box::new(Switch {
+                visible: visible.clone(),
+                tick_ms,
+            }),
+        )
+        .unwrap();
+        let tick = || {
+            // SAFETY: synchronous message to our own window on this thread.
+            unsafe { SendMessageW(hwnd, WM_TIMER, Some(WPARAM(TIMER_ID)), Some(LPARAM(0))) };
+        };
+        // SAFETY: query on our own window.
+        let shown = || unsafe { IsWindowVisible(hwnd).as_bool() };
+
+        assert!(!shown(), "nothing to show at creation");
+        tick();
+        assert!(!shown());
+        visible.set(true);
+        tick();
+        assert!(shown(), "shown when the handler has something to show");
+        tick();
+        assert!(shown());
+        visible.set(false);
+        tick();
+        assert!(!shown(), "hidden again when there is nothing to show");
+        destroy(hwnd);
+    }
+
+    #[test]
     fn timer_tick_redraws() {
         let draws = Rc::new(Cell::new(0));
         let hwnd = make(&draws);
@@ -340,7 +421,9 @@ mod tests {
         // The handler is dropped with the window (WM_NCDESTROY frees the State).
         struct Probe(Rc<Cell<bool>>);
         impl Handler for Probe {
-            fn draw(&mut self, _: &mut Canvas) {}
+            fn draw(&mut self, _: &mut Canvas) -> bool {
+                true
+            }
         }
         impl Drop for Probe {
             fn drop(&mut self) {

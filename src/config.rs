@@ -43,7 +43,7 @@ red_minutes = 5              # ...and red this long before the end
 green = "#2ecc71"
 orange = "#f39c12"
 red = "#e74c3c"
-break = "#7f8c8d"            # the break between two blocks
+break = "#bdc3c7"            # the break between two blocks
 track = "#33333399"          # the part of the bar that is not filled yet
 text = "#ffffff"
 
@@ -137,7 +137,7 @@ impl Default for Colors {
             green: Rgba::rgb(0x2e, 0xcc, 0x71),
             orange: Rgba::rgb(0xf3, 0x9c, 0x12),
             red: Rgba::rgb(0xe7, 0x4c, 0x3c),
-            break_gap: Rgba::rgb(0x7f, 0x8c, 0x8d),
+            break_gap: Rgba::rgb(0xbd, 0xc3, 0xc7),
             track: Rgba {
                 r: 0x33,
                 g: 0x33,
