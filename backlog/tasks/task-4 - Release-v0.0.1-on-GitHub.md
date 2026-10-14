@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:15'
-updated_date: '2026-10-14 18:26'
+updated_date: '2026-10-14 18:59'
 labels: []
 dependencies: []
 modified_files:
@@ -48,7 +48,7 @@ First public release of Time's up as a GitHub release with the portable zip, so 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Done in this order: repo made public on request (secret scan of tracked files found nothing; commit author bpeiren@gmail.com is now public), version 0.0.1, MIT license (LICENSE, Cargo.toml, README, zip), package (248 tests, dependency check, smoke test: exe 549,376 bytes, zip 291,754 bytes, 12.4 MB working set / 2.1 MB private, 0.47 % CPU), release notes, push of main, annotated tag v0.0.1 (commit c6b9d05), GitHub pre-release with the zip. Verification: GitHub digest and an unauthenticated download both give sha256 22c8bcfdc61a8c62368ba72670213ce25a2090eae038b951bcf7e70829c92416, equal to the local zip and the notes; the zip unpacks to LICENSE, README.txt, times-up.exe, times-up.toml. Notes: dist/ still holds the older 0.1.0 folder and zip (ignored by git); the interrupted first packaging attempt was rerun after the user said to resume.
+Done in this order: repo made public on request (secret scan of tracked files found nothing; commit author bpeiren@gmail.com is now public), version 0.0.1, MIT license (LICENSE, Cargo.toml, README, zip), package (248 tests, dependency check, smoke test: exe 549,376 bytes, zip 291,754 bytes, 12.4 MB working set / 2.1 MB private, 0.47 % CPU), release notes, push of main, annotated tag v0.0.1 (commit ee13e1d), GitHub pre-release with the zip. Verification: GitHub digest and an unauthenticated download both give sha256 22c8bcfdc61a8c62368ba72670213ce25a2090eae038b951bcf7e70829c92416, equal to the local zip and the notes; the zip unpacks to LICENSE, README.txt, times-up.exe, times-up.toml. Notes: dist/ still holds the older 0.1.0 folder and zip (ignored by git); the interrupted first packaging attempt was rerun after the user said to resume.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

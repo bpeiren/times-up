@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:25'
-updated_date: '2026-10-14 18:28'
+updated_date: '2026-10-14 18:59'
 labels: []
 dependencies: []
 modified_files:
@@ -59,7 +59,7 @@ The application is called "Time's up", but the code, docs, Groma architecture, B
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Display name is now Time's up. Changed: window title, tray tooltip, message box title (all compiled into the exe), lib docs, sample config header (+ the three tests that look for it), autostart test paths (now a folder with an apostrophe, which also exercises the quoting), package script messages, the readme inside the zip, README, RELEASE_NOTES; Groma project/system/container titles and the Windows external text via groma edit; Backlog titles, descriptions, plans, notes and summaries via the CLI. Left on purpose because they are identifiers that cannot contain an apostrophe: times-up.exe, times-up.toml, the crate and repository name, the window class TimesUpBar, the registry value TimesUp, and the Backlog task file name slug. The GitHub repository has no description set. Release: 248 tests, clippy and fmt clean; new zip 291,762 bytes sha256 58c59d037593d4b55a11a07d14c71f45b0923ce742006f5504bd61c0dec33e92; the tag v0.0.1 was force-moved from c6b9d05 to 52064d8 so it matches the corrected source; asset replaced with --clobber; release title and notes updated. Verified by an unauthenticated download: sha256 equals the local zip and the new checksum in the release page, the old checksum is gone, readme and sample config start with the new name, and the exe contains the new name and not the old one.
+Display name is now Time's up. Changed: window title, tray tooltip, message box title (all compiled into the exe), lib docs, sample config header (+ the three tests that look for it), autostart test paths (now a folder with an apostrophe, which also exercises the quoting), package script messages, the readme inside the zip, README, RELEASE_NOTES; Groma project/system/container titles and the Windows external text via groma edit; Backlog titles, descriptions, plans, notes and summaries via the CLI. Left on purpose because they are identifiers that cannot contain an apostrophe: times-up.exe, times-up.toml, the crate and repository name, the window class TimesUpBar, the registry value TimesUp, and the Backlog task file name slug. The GitHub repository has no description set. Release: 248 tests, clippy and fmt clean; new zip 291,762 bytes sha256 58c59d037593d4b55a11a07d14c71f45b0923ce742006f5504bd61c0dec33e92; the tag v0.0.1 was force-moved from ee13e1d to ff2f13b so it matches the corrected source; asset replaced with --clobber; release title and notes updated. Verified by an unauthenticated download: sha256 equals the local zip and the new checksum in the release page, the old checksum is gone, readme and sample config start with the new name, and the exe contains the new name and not the old one.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
