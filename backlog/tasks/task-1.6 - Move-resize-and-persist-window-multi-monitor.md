@@ -4,6 +4,7 @@ title: 'Move, resize and persist window; multi-monitor'
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:51'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.3
@@ -24,3 +25,9 @@ Teachers place the bar where it does not cover their material, and projectors ge
 - [ ] #2 Position and size saved to config after the drag ends
 - [ ] #3 If the saved monitor is missing, the window moves onto a visible monitor
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->

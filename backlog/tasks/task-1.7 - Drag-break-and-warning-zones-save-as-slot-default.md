@@ -4,6 +4,7 @@ title: Drag break and warning zones; save as slot default
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:51'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.5
@@ -25,3 +26,9 @@ Real classes rarely match the default: the break may start earlier or the warnin
 - [ ] #3 Drag changes apply to the current class only and revert at the next class
 - [ ] #4 Right-click "Save as default for this slot" stores break and both blocks thresholds in the config
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->

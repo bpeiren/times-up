@@ -4,6 +4,7 @@ title: TOML config next to the exe
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:50'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.2
@@ -25,3 +26,9 @@ The app must be portable, so all settings live in times-up.toml beside the exe, 
 - [ ] #4 Read-only location: app runs on defaults and does not crash on save
 - [ ] #5 Per-slot defaults (break, thresholds) can be written back without losing comments where possible
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->

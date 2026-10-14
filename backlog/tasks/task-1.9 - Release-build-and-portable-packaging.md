@@ -4,6 +4,7 @@ title: Release build and portable packaging
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:51'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.6
@@ -25,3 +26,9 @@ Final deliverable is a folder with times-up.exe and times-up.toml.
 - [ ] #2 Zip with exe and a commented sample times-up.toml
 - [ ] #3 Measured exe size and idle RAM/CPU recorded in README
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->

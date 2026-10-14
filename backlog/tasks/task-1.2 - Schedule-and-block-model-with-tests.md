@@ -4,6 +4,7 @@ title: Schedule and block model with tests
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:50'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.1
@@ -25,3 +26,9 @@ The timer must be driven by the system clock and per-day class lists, so it need
 - [ ] #4 Back-to-back classes stay visible; weekends have no classes
 - [ ] #5 Unit tests cover boundaries, breaks, zones, lead-in and day changes
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->

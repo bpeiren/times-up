@@ -4,6 +4,7 @@ title: 'Bar, zones, break and countdown display'
 status: To Do
 assignee: []
 created_date: '2026-10-14 15:50'
+updated_date: '2026-10-14 15:57'
 labels: []
 dependencies:
   - TASK-1.2
@@ -26,3 +27,9 @@ The core UI: a fixed-size bar filling from the left, green then orange then red,
 - [ ] #4 mm:ss countdown shows time left in the current block or break, text scales with window height
 - [ ] #5 Lead-in shows dim track with "starts in mm:ss"; window hides about 10 s after the last class ends
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 All code is covered by sensible tests
+- [ ] #2 Tests pass
+<!-- DOD:END -->
