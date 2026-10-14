@@ -125,6 +125,11 @@ logic.
 | `icon`, `win::tray` | The notification-area icon, drawn at run time, and its click handling |
 | `win::text`, `win::monitors`, `win::surface` | GDI text, monitor areas, showing the canvas |
 
+### Commit messages
+
+[Conventional Commits](https://www.conventionalcommits.org/) (`feat(bar): ...`, `fix(window): ...`),
+so the changelog can be generated from the history. The details are in `AGENTS.md`.
+
 ### License
 
 [MIT](LICENSE), copyright (c) 2026 Bart Peiren. The zip contains the license text.

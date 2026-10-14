@@ -28,3 +28,29 @@ Do not edit Backlog task, draft, document, decision, or milestone markdown files
 
 This project uses Groma. Before you scan, inspect, or curate architecture, or change files for a Backlog task, run `groma agent-instructions` and read the guide it names for that job. When it reports a first scan, ask the user whether they want you to curate the architecture. Do not edit Groma-owned architecture files directly.
 <!-- groma:end -->
+
+## Commit messages
+
+Write commit messages as [Conventional Commits](https://www.conventionalcommits.org/) so a changelog
+can be generated from the history.
+
+```
+<type>(<scope>): <subject>
+
+<optional body: what and why, wrapped at about 100 columns>
+
+Refs: TASK-12
+Co-Authored-By: ...
+```
+
+- **Types:** `feat` (new behaviour), `fix` (bug fix), `perf`, `refactor`, `docs`, `test`, `build`
+  (Cargo, packaging), `ci`, `chore`. `feat`, `fix` and `perf` show up in the changelog.
+- **Subject:** imperative mood, lower case, no full stop, at most 72 characters
+  (`fix(window): keep the menu above the bar`).
+- **Scope** (optional): the module or area, e.g. `schedule`, `config`, `bar`, `editing`, `window`,
+  `menu`, `tray`, `autostart`, `package`, `docs`, `backlog`, `groma`.
+- **Breaking changes:** add `!` after the type or scope and a `BREAKING CHANGE:` footer, e.g. when
+  the `times-up.toml` format changes in a way that old files stop working.
+- **Footers:** `Refs: TASK-n` for the Backlog task; keep the `Co-Authored-By:` trailer.
+- One logical change per commit. Task bookkeeping on its own is `chore(backlog): ...`.
+- Commits up to and including v0.0.1 were not written this way; the changelog starts after it.
