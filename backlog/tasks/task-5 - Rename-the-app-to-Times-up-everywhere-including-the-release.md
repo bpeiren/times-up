@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: 'Rename the app to "Time''s up" everywhere, including the release'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:25'
-updated_date: '2026-10-14 18:27'
+updated_date: '2026-10-14 18:28'
 labels: []
 dependencies: []
 modified_files:
@@ -35,15 +35,15 @@ The application is called "Time's up", but the code, docs, Groma architecture, B
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 No display text says "Times Up" any more: window title, tray tooltip, message box title, config sample header, docs, readme in the zip, release notes, Groma, Backlog
-- [ ] #2 The released v0.0.1 is corrected: its zip (exe strings and readme) is rebuilt, the release title and notes use the new name with the new checksum, and the tag points at the corrected commit
-- [ ] #3 The downloaded release asset matches the new local zip by SHA256
+- [x] #1 No display text says "Times Up" any more: window title, tray tooltip, message box title, config sample header, docs, readme in the zip, release notes, Groma, Backlog
+- [x] #2 The released v0.0.1 is corrected: its zip (exe strings and readme) is rebuilt, the release title and notes use the new name with the new checksum, and the tag points at the corrected commit
+- [x] #3 The downloaded release asset matches the new local zip by SHA256
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 All code is covered by sensible tests
-- [ ] #2 Tests pass
+- [x] #1 All code is covered by sensible tests
+- [x] #2 Tests pass
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -55,3 +55,15 @@ The application is called "Time's up", but the code, docs, Groma architecture, B
 4. Commit, push main, move the tag v0.0.1 to the new commit (force), gh release upload --clobber, gh release edit title and notes
 5. Download the asset unauthenticated and compare the SHA256; finalize, commit, push
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Display name is now Time's up. Changed: window title, tray tooltip, message box title (all compiled into the exe), lib docs, sample config header (+ the three tests that look for it), autostart test paths (now a folder with an apostrophe, which also exercises the quoting), package script messages, the readme inside the zip, README, RELEASE_NOTES; Groma project/system/container titles and the Windows external text via groma edit; Backlog titles, descriptions, plans, notes and summaries via the CLI. Left on purpose because they are identifiers that cannot contain an apostrophe: times-up.exe, times-up.toml, the crate and repository name, the window class TimesUpBar, the registry value TimesUp, and the Backlog task file name slug. The GitHub repository has no description set. Release: 248 tests, clippy and fmt clean; new zip 291,762 bytes sha256 58c59d037593d4b55a11a07d14c71f45b0923ce742006f5504bd61c0dec33e92; the tag v0.0.1 was force-moved from c6b9d05 to 52064d8 so it matches the corrected source; asset replaced with --clobber; release title and notes updated. Verified by an unauthenticated download: sha256 equals the local zip and the new checksum in the release page, the old checksum is gone, readme and sample config start with the new name, and the exe contains the new name and not the old one.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The app is called Time's up everywhere it is displayed (code, tests, docs, Groma, Backlog), and release v0.0.1 was corrected in place: new zip, new checksum, release title and notes, and the tag moved to the corrected commit.
+<!-- SECTION:FINAL_SUMMARY:END -->
