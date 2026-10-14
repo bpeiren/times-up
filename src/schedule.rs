@@ -22,6 +22,11 @@ pub const fn hm(h: u32, m: u32) -> Secs {
     h * 3600 + m * MINUTE
 }
 
+/// A time of day as `HH:MM` (seconds are dropped).
+pub fn format_clock(secs: Secs) -> String {
+    format!("{:02}:{:02}", secs / 3600, secs % 3600 / 60)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weekday {
     Mon,
@@ -396,6 +401,15 @@ mod tests {
             left,
             zone,
         }
+    }
+
+    #[test]
+    fn clock_times_are_formatted_as_hh_mm() {
+        assert_eq!(format_clock(hm(9, 5)), "09:05");
+        assert_eq!(format_clock(hm(14, 40)), "14:40");
+        assert_eq!(format_clock(hm(0, 0)), "00:00");
+        assert_eq!(format_clock(hm(9, 5) + 59), "09:05", "seconds are dropped");
+        assert_eq!(format_clock(hm(24, 0)), "24:00", "the end of the day");
     }
 
     // ---- classes and default break ----

@@ -12,7 +12,7 @@ groma:
 description: Turns the schedule state into what the bar shows
 ---
 
-Given a weekday and the time it builds the bar: how far the class has progressed, where each block, the break and the orange and red zones sit, and the countdown label (time left in the block, 'Break mm:ss', or 'Starts in mm:ss'). It then paints a dim track, the elapsed part in zone colours from the left, the break in grey, and markers where the zones begin. It returns nothing when the window should be hidden. It has no Windows dependency.
+Given a weekday and the time it builds the bar: how far the class has progressed, where each block, the break and the orange and red zones sit, and the countdown label (time left in the block, 'Break mm:ss', or 'Starts in mm:ss') with the place it is centred on: the block it counts down, the break, or the whole bar before class. It then paints a dim track, the elapsed part in zone colours from the left, the break in grey, and markers where the zones begin. It returns nothing when the window should be hidden. It has no Windows dependency.
 
 ## Relationships
 

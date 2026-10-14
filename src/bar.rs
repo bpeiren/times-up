@@ -30,6 +30,18 @@ pub struct BarView {
     pub segments: Vec<Segment>,
     /// The countdown text.
     pub label: String,
+    /// Where the label is centred, as a share of the bar width: in the block it counts down.
+    pub label_center: f32,
+}
+
+/// What the label is about, and so what it is centred on.
+#[derive(Clone, Copy)]
+enum Focus {
+    Block(usize),
+    Break,
+    /// The whole class, not started yet.
+    Whole,
+    LastBlock,
 }
 
 /// `mm:ss`, or `h:mm:ss` from one hour up.
@@ -45,25 +57,32 @@ pub fn format_countdown(secs: Secs) -> String {
 /// What to show at `now` on `day`, or `None` when the window should be hidden.
 pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
     let state = schedule.state(day, now);
-    let (class, progress_secs, label) = match state {
+    let (class, progress_secs, label, focus) = match state {
         State::Idle { .. } => return None,
         State::LeadIn { class, starts_in } => (
             class,
             0,
             format!("Starts in {}", format_countdown(starts_in)),
+            Focus::Whole,
         ),
         State::Running {
             class,
             elapsed,
             left,
+            block,
             ..
-        } => (class, elapsed, format_countdown(left)),
+        } => (class, elapsed, format_countdown(left), Focus::Block(block)),
         State::Break {
             class,
             elapsed,
             left,
-        } => (class, elapsed, format!("Break {}", format_countdown(left))),
-        State::Ended { class } => (class, u32::MAX, format_countdown(0)),
+        } => (
+            class,
+            elapsed,
+            format!("Break {}", format_countdown(left)),
+            Focus::Break,
+        ),
+        State::Ended { class } => (class, u32::MAX, format_countdown(0), Focus::LastBlock),
     };
     let class = schedule.classes(day).get(class)?;
     let total = class.duration().max(1) as f32;
@@ -91,7 +110,21 @@ pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
             });
         }
     }
+    let middle = |start: Secs, end: Secs| (share(start) + share(end)) / 2.0;
+    let label_center = match (focus, class.brk) {
+        (Focus::Block(i), _) => {
+            let b = class.block(i);
+            middle(b.start, b.end)
+        }
+        (Focus::LastBlock, _) => {
+            let b = class.block(class.block_count() - 1);
+            middle(b.start, b.end)
+        }
+        (Focus::Break, Some(b)) => middle(b.start, b.end()),
+        (Focus::Break, None) | (Focus::Whole, _) => 0.5,
+    };
     Some(BarView {
+        label_center,
         progress: share(progress_secs.min(class.duration())),
         segments,
         label,
@@ -299,6 +332,51 @@ mod tests {
         assert!(close(v.progress, 2730.0 / 6000.0));
         let v = view(&double(), MON, hm(9, 55)).unwrap();
         assert_eq!(v.label, "45:00", "back to counting the second block");
+    }
+
+    #[test]
+    fn the_label_is_centred_in_the_block_it_counts_down() {
+        // A single block: the middle of the bar.
+        let single = view(&single(), MON, hm(9, 10)).unwrap();
+        assert!(close(single.label_center, 0.5));
+        // A double class: block 1 is 0..45%, the break 45..55%, block 2 55..100%.
+        let at = |m: u32| {
+            view(&double(), MON, hm(9, 0) + m * MINUTE)
+                .unwrap()
+                .label_center
+        };
+        assert!(close(at(10), 0.225), "first block: {}", at(10));
+        assert!(close(at(44), 0.225));
+        assert!(close(at(60), 0.775), "second block: {}", at(60));
+        assert!(close(at(99), 0.775));
+        assert!(close(at(50), 0.5), "the break text sits on the break");
+    }
+
+    #[test]
+    fn the_label_before_and_after_class_is_centred_sensibly() {
+        // Lead-in: the class has not started, so the whole bar.
+        let lead = view(&double(), MON, hm(9, 0) - 60).unwrap();
+        assert!(lead.label.starts_with("Starts in"));
+        assert!(close(lead.label_center, 0.5));
+        // Just ended: the last block, as the last countdown was in it.
+        let ended = view(&double(), MON, hm(10, 40) + 2).unwrap();
+        assert!(close(ended.label_center, 0.775));
+        let ended = view(&single(), MON, hm(9, 50) + 2).unwrap();
+        assert!(close(ended.label_center, 0.5));
+    }
+
+    #[test]
+    fn the_label_follows_a_moved_break() {
+        let brk = crate::schedule::Break {
+            start: 30 * MINUTE,
+            len: 20 * MINUTE,
+        };
+        let c = class(hm(9, 0), hm(10, 40)).with_break(Some(brk)).unwrap();
+        let s = schedule(vec![c]);
+        let at = |m: u32| view(&s, MON, hm(9, 0) + m * MINUTE).unwrap().label_center;
+        assert!(close(at(10), 0.15), "block 1 is now 0..30%: {}", at(10));
+        assert!(close(at(40), 0.40), "the break is 30..50%");
+        assert!(close(at(70), 0.75), "block 2 is 50..100%");
     }
 
     #[test]

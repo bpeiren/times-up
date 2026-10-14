@@ -62,9 +62,14 @@ try {
 }
 
 Write-Host "== Packaging $name"
-if (Test-Path $folder) { Remove-Item $folder -Recurse -Force }
+# Empty the folder instead of deleting it: another program (a terminal or an Explorer window that is
+# sitting in it) may hold the folder itself open, which would make the delete fail.
+if (Test-Path $folder) {
+    Get-ChildItem $folder -Force | Remove-Item -Recurse -Force
+} else {
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+}
 if (Test-Path $zip) { Remove-Item $zip -Force }
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
 Copy-Item $exe (Join-Path $folder 'times-up.exe')
 Copy-Item (Join-Path $root 'assets\times-up.sample.toml') (Join-Path $folder 'times-up.toml')
 Copy-Item (Join-Path $root 'assets\README.txt') (Join-Path $folder 'README.txt')

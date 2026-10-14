@@ -19,12 +19,13 @@ Download the zip, put `times-up.exe` and `times-up.toml` in any folder and start
   also when the bar is hidden. Click it for the same menu as a right-click on the bar.
 - The bar fills from the left in green; the last 10 minutes of a block are orange and the last 5 are
   red. Thin lines on the unfilled part show where the colours change.
-- The text shows the time left in the current block, `Break mm:ss` during a break, or
-  `Starts in mm:ss` before class.
+- The text shows the time left in the current block, centred in that block; `Break mm:ss` during a
+  break, centred on the break; or `Starts in mm:ss` before class.
 - Drag the bar to move it and its edges or corners to resize it; its place and size are remembered.
-- Drag the break, or an orange or red line, to change it for the class that is running. That change
-  is forgotten when the class is over, unless you right-click and choose *Save as default for this
-  slot*.
+- Drag the break, or an orange or red line, to change it for the class that is running. While you
+  drag, a small time at the bottom of the bar shows when that zone starts (`09:35`) or when the
+  break starts and ends (`09:45-09:55`). The change is forgotten when the class is over, unless you
+  right-click and choose *Save as default for this slot*.
 - Right-click the bar or click the tray icon: *Save as default for this slot*, *Open config
   (Notepad)*, *Start with Windows*, *Quit*.
 
@@ -69,10 +70,10 @@ On Windows 11, 2560x1080 at 100 % scaling, release build, a class in progress (`
 
 | | |
 |---|---|
-| `times-up.exe` | 547,840 bytes (about 0.5 MB) |
-| zip (exe + sample config + readme) | 290,239 bytes |
-| Memory, working set | 11.9 MB, of which only 2.1 MB is private; the rest is shared Windows DLL pages |
-| CPU, idle | 0.42 % of one core (one redraw per second), 2 threads |
+| `times-up.exe` | 549,376 bytes (about 0.5 MB) |
+| zip (exe + sample config + readme) | 290,944 bytes |
+| Memory, working set | 12.4 MB, of which only 2.1 MB is private; the rest is shared Windows DLL pages |
+| CPU, idle | 0.52 % of one core (one redraw per second) |
 | Disk and registry | nothing outside its own folder, except the optional *Start with Windows* entry |
 
 ## For developers

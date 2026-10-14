@@ -143,6 +143,15 @@ struct State {
     tray: Option<Tray>,
     /// Explorer broadcasts this message when it restarts and the tray icons have to be re-added.
     taskbar_created: u32,
+    /// A menu is open. Its message loop keeps delivering timer ticks, and re-asserting "topmost"
+    /// then would put the bar on top of the menu.
+    menu_open: bool,
+}
+
+/// Whether a tick should push the window back to the top of the topmost windows: only while it
+/// is visible, and never in the middle of a drag or while a menu is open above it.
+fn should_reassert_topmost(shown: bool, dragging: bool, menu_open: bool) -> bool {
+    shown && !dragging && !menu_open
 }
 
 impl State {
@@ -364,6 +373,7 @@ fn create_inner(
         margin,
         tray: None,
         taskbar_created: tray::taskbar_created_message(),
+        menu_open: false,
     });
     // SAFETY: standard window creation; see the ownership note below.
     unsafe {
@@ -484,10 +494,18 @@ unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut State> {
 unsafe fn show_menu(hwnd: HWND) {
     // SAFETY: see `state_of`; the borrow ends with this statement.
     let menu_state = match unsafe { state_of(hwnd) } {
-        Some(state) if state.drag.is_none() => state.handler.menu_state(),
+        Some(state) if state.drag.is_none() => {
+            state.menu_open = true;
+            state.handler.menu_state()
+        }
         _ => return,
     };
-    if let Some(command) = menu::show(hwnd, menu_state)
+    let chosen = menu::show(hwnd, menu_state);
+    // SAFETY: as above; the menu has closed, so the window may even be gone (Quit comes later).
+    if let Some(state) = unsafe { state_of(hwnd) } {
+        state.menu_open = false;
+    }
+    if let Some(command) = chosen
         && let Some(problem) = execute(hwnd, command)
     {
         report_error(&problem);
@@ -522,7 +540,7 @@ unsafe extern "system" fn window_proc(
             WM_TIMER if wparam.0 == TIMER_ID => {
                 if let Some(state) = state_of(hwnd) {
                     state.redraw(hwnd);
-                    if state.shown && state.drag.is_none() {
+                    if should_reassert_topmost(state.shown, state.drag.is_some(), state.menu_open) {
                         // Other topmost windows can push us down; stay on top without taking
                         // focus.
                         let _ = SetWindowPos(
@@ -1434,6 +1452,18 @@ mod tests {
         }
         assert!(tray::icon_rect(hwnd).is_some());
         destroy(hwnd);
+    }
+
+    #[test]
+    fn the_bar_is_not_pushed_above_an_open_menu() {
+        assert!(should_reassert_topmost(true, false, false), "normal tick");
+        assert!(
+            !should_reassert_topmost(true, false, true),
+            "a menu is open: leave the z-order alone"
+        );
+        assert!(!should_reassert_topmost(true, true, false), "dragging");
+        assert!(!should_reassert_topmost(false, false, false), "hidden");
+        assert!(!should_reassert_topmost(true, true, true));
     }
 
     #[test]

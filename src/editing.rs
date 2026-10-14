@@ -2,7 +2,7 @@
 //! dragged. Pure rules (no Win32): which handle is under the pointer, and what a drag does to the
 //! class, snapped to whole minutes and clamped so the result is always a sensible class.
 
-use crate::schedule::{Break, Class, MINUTE, Secs, Warnings};
+use crate::schedule::{Break, Class, MINUTE, Secs, Warnings, format_clock};
 
 /// A block between the start (or the break) and the end of the class needs at least this much.
 pub const MIN_BLOCK: Secs = 5 * MINUTE;
@@ -45,6 +45,47 @@ fn zone_at(class: &Class, block: usize, edge: ZoneEdge) -> Secs {
         ZoneEdge::Red => w.red,
     };
     b.end - before_end.min(b.len())
+}
+
+/// What to tell the teacher while a handle is dragged: the clock time it stands for and where on
+/// the bar to show it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandleLabel {
+    /// `09:35` for a zone boundary (when the zone starts), `09:45–09:55` for the break.
+    pub text: String,
+    /// Where the label belongs, as a share of the bar width.
+    pub position: f32,
+}
+
+/// The label for `handle` of `class` as it is now; `None` for a break handle of a class without
+/// a break.
+pub fn describe(class: &Class, handle: Handle) -> Option<HandleLabel> {
+    let total = class.duration().max(1) as f32;
+    let at = |offset: Secs| format_clock(class.start + offset);
+    match handle {
+        Handle::Zone { block, edge } => {
+            if block >= class.block_count() {
+                return None;
+            }
+            let offset = zone_at(class, block, edge);
+            Some(HandleLabel {
+                text: at(offset),
+                position: offset as f32 / total,
+            })
+        }
+        Handle::BreakStart | Handle::BreakEnd | Handle::BreakBody => {
+            let b = class.brk?;
+            let position = match handle {
+                Handle::BreakStart => b.start as f32,
+                Handle::BreakEnd => b.end() as f32,
+                _ => (b.start + b.end()) as f32 / 2.0,
+            } / total;
+            Some(HandleLabel {
+                text: format!("{}\u{2013}{}", at(b.start), at(b.end())),
+                position,
+            })
+        }
+    }
 }
 
 /// The handle under `x` (pixels from the left edge of a bar `width` pixels wide), if any.
@@ -283,6 +324,118 @@ mod tests {
                 Some(Handle::BreakStart | Handle::BreakEnd | Handle::BreakBody)
             ));
         }
+    }
+
+    // ---- describing a handle ----
+
+    #[test]
+    fn a_zone_boundary_is_described_by_the_time_the_zone_starts() {
+        let c = double(); // 09:00-10:40, blocks 09:00-09:45 and 09:55-10:40
+        let label = |block, edge| describe(&c, Handle::Zone { block, edge }).unwrap();
+        let orange1 = label(0, ZoneEdge::Orange);
+        assert_eq!(orange1.text, "09:35");
+        assert!(
+            (orange1.position - 0.35).abs() < 1e-4,
+            "{}",
+            orange1.position
+        );
+        assert_eq!(label(0, ZoneEdge::Red).text, "09:40");
+        assert_eq!(label(1, ZoneEdge::Orange).text, "10:30");
+        let red2 = label(1, ZoneEdge::Red);
+        assert_eq!(red2.text, "10:35");
+        assert!((red2.position - 0.95).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_description_follows_the_dragged_class() {
+        let moved = drag(
+            &double(),
+            Handle::Zone {
+                block: 0,
+                edge: ZoneEdge::Orange,
+            },
+            mins(3),
+        );
+        assert_eq!(
+            describe(
+                &moved,
+                Handle::Zone {
+                    block: 0,
+                    edge: ZoneEdge::Orange
+                }
+            )
+            .unwrap()
+            .text,
+            "09:38"
+        );
+    }
+
+    #[test]
+    fn a_zone_longer_than_its_block_is_described_where_it_is_drawn() {
+        let mut c = double();
+        c.warnings[0] = Warnings {
+            orange: 60 * 60,
+            red: 5 * 60,
+        };
+        let label = describe(
+            &c,
+            Handle::Zone {
+                block: 0,
+                edge: ZoneEdge::Orange,
+            },
+        )
+        .unwrap();
+        assert_eq!(label.text, "09:00", "it starts at the start of its block");
+    }
+
+    #[test]
+    fn the_break_is_described_by_its_start_and_end() {
+        let c = double(); // break 09:45-09:55
+        for (handle, position) in [
+            (Handle::BreakStart, 0.45),
+            (Handle::BreakEnd, 0.55),
+            (Handle::BreakBody, 0.50),
+        ] {
+            let label = describe(&c, handle).unwrap();
+            assert_eq!(label.text, "09:45\u{2013}09:55", "{handle:?}");
+            assert!(
+                (label.position - position).abs() < 1e-4,
+                "{handle:?}: {}",
+                label.position
+            );
+        }
+        let moved = drag(&c, Handle::BreakBody, mins(10));
+        assert_eq!(
+            describe(&moved, Handle::BreakBody).unwrap().text,
+            "09:55\u{2013}10:05"
+        );
+    }
+
+    #[test]
+    fn nothing_is_described_for_a_handle_the_class_does_not_have() {
+        let c = single();
+        assert_eq!(describe(&c, Handle::BreakStart), None);
+        assert_eq!(describe(&c, Handle::BreakBody), None);
+        assert_eq!(
+            describe(
+                &c,
+                Handle::Zone {
+                    block: 1,
+                    edge: ZoneEdge::Red
+                }
+            ),
+            None
+        );
+        assert!(
+            describe(
+                &c,
+                Handle::Zone {
+                    block: 0,
+                    edge: ZoneEdge::Red
+                }
+            )
+            .is_some()
+        );
     }
 
     // ---- dragging the break ----

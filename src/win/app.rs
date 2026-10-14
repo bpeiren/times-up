@@ -25,6 +25,12 @@ const LABEL_SCALE: f32 = 0.5;
 /// How close (as a share of the bar height, at least 4 px) the pointer must be to a break edge or
 /// zone boundary to pick it up.
 const HANDLE_GRIP_SCALE: f32 = 0.15;
+/// The time shown while a handle is dragged: its font and the strip at the bottom of the bar it
+/// is drawn in, as shares of the bar height.
+const DRAG_LABEL_SCALE: f32 = 0.22;
+const DRAG_STRIP_SCALE: f32 = 0.32;
+/// Keep the drag label this far (as a share of the bar width) from either end.
+const DRAG_LABEL_MARGIN: f32 = 0.08;
 
 /// Opens a file for editing.
 type Opener = Box<dyn Fn(&Path) -> std::io::Result<()>>;
@@ -227,9 +233,43 @@ impl App {
         let (w, h) = (canvas.width(), canvas.height());
         let font_px = (h as f32 * LABEL_SCALE) as i32;
         if let Some(mask) = render_mask(&view.label, w, h, font_px) {
-            canvas.blend_mask(&mask, w, h, 0, 0, self.config.colors.text);
+            // The mask has the text in the middle of the whole bar; shift it to the middle of the
+            // block that the countdown is about.
+            let shift = (view.label_center * w as f32 - w as f32 / 2.0).round() as i32;
+            canvas.blend_mask(&mask, w, h, shift, 0, self.config.colors.text);
         }
+        self.draw_drag_label(canvas, day);
         true
+    }
+
+    /// While a handle is dragged: its time, small, at the bottom of the bar under the handle.
+    fn draw_drag_label(&self, canvas: &mut Canvas, day: Weekday) {
+        let Some(grab) = self.grab.as_ref().filter(|g| g.day == day) else {
+            return;
+        };
+        let Some(class) = self.config.schedule.classes(day).get(grab.index) else {
+            return;
+        };
+        let Some(label) = editing::describe(class, grab.handle) else {
+            return;
+        };
+        let (w, h) = (canvas.width(), canvas.height());
+        let strip = ((h as f32 * DRAG_STRIP_SCALE) as u32).max(1);
+        let font_px = ((h as f32 * DRAG_LABEL_SCALE) as i32).max(9);
+        if let Some(mask) = render_mask(&label.text, w, strip, font_px) {
+            let center = label
+                .position
+                .clamp(DRAG_LABEL_MARGIN, 1.0 - DRAG_LABEL_MARGIN);
+            let shift = (center * w as f32 - w as f32 / 2.0).round() as i32;
+            canvas.blend_mask(
+                &mask,
+                w,
+                strip,
+                shift,
+                (h - strip) as i32,
+                self.config.colors.text,
+            );
+        }
     }
 }
 
@@ -1245,6 +1285,183 @@ mod tests {
         assert!(app.grab.is_none());
         assert_eq!(minutes(brk_of(&app, 0)), (45, 55), "the file wins");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- where the text is drawn ----
+
+    const WHITE: u32 = 0xffff_ffff;
+
+    /// The box around the text-coloured pixels in `x0..x1` and `y0..y1`: (min x, max x, min y, max y).
+    fn ink_box(
+        canvas: &Canvas,
+        x0: u32,
+        x1: u32,
+        y0: u32,
+        y1: u32,
+    ) -> Option<(u32, u32, u32, u32)> {
+        let mut found: Option<(u32, u32, u32, u32)> = None;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if canvas.pixel(x, y) == WHITE {
+                    found = Some(match found {
+                        None => (x, x, y, y),
+                        Some((a, b, c, d)) => (a.min(x), b.max(x), c.min(y), d.max(y)),
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    fn centre(b: (u32, u32, u32, u32)) -> f32 {
+        (b.0 + b.1) as f32 / 2.0
+    }
+
+    /// A 1000 x 60 bar drawn for the two double classes at `now`.
+    fn drawn(app: &mut App, now: Secs) -> Canvas {
+        let mut canvas = Canvas::new(1000, 60);
+        assert!(app.draw_at(&mut canvas, MON, now));
+        canvas
+    }
+
+    #[test]
+    fn the_countdown_is_centred_in_the_block_it_counts() {
+        let mut app = two_double_classes();
+        // The first block spans 0..450 px, the break 450..550, the second block 550..1000.
+        let first = ink_box(&drawn(&mut app, hm(9, 10)), 0, 1000, 0, 60).expect("text");
+        assert!(
+            (centre(first) - 225.0).abs() <= 8.0,
+            "first block: {first:?}"
+        );
+        let second = ink_box(&drawn(&mut app, hm(10, 0)), 0, 1000, 0, 60).expect("text");
+        assert!(
+            (centre(second) - 775.0).abs() <= 8.0,
+            "second block: {second:?}"
+        );
+        let brk = ink_box(&drawn(&mut app, hm(9, 50)), 0, 1000, 0, 60).expect("text");
+        assert!((centre(brk) - 500.0).abs() <= 8.0, "break: {brk:?}");
+    }
+
+    #[test]
+    fn the_countdown_of_a_single_block_class_stays_in_the_middle() {
+        let mut app = app_with(vec![class(hm(9, 0), hm(9, 50))]);
+        let ink = ink_box(&drawn(&mut app, hm(9, 10)), 0, 1000, 0, 60).expect("text");
+        assert!((centre(ink) - 500.0).abs() <= 8.0, "{ink:?}");
+    }
+
+    #[test]
+    fn the_lead_in_text_is_centred_on_the_whole_bar() {
+        let mut app = two_double_classes();
+        let ink = ink_box(&drawn(&mut app, hm(9, 0) - 120), 0, 1000, 0, 60).expect("text");
+        assert!((centre(ink) - 500.0).abs() <= 8.0, "{ink:?}");
+    }
+
+    #[test]
+    fn the_countdown_follows_a_moved_break() {
+        let mut app = two_double_classes();
+        // Break from 45..55 minutes to 25..35: block 1 is now 0..25%, the middle of it is at 125 px.
+        assert!(app.grab_at(MON, NOW, 500, 1000, 60));
+        app.move_grab(-200);
+        app.grab_end();
+        let ink = ink_box(&drawn(&mut app, hm(9, 10)), 0, 1000, 0, 40).expect("text");
+        assert!((centre(ink) - 125.0).abs() <= 8.0, "{ink:?}");
+    }
+
+    // ---- the time shown while dragging ----
+
+    /// Where the small label is drawn: the strip at the bottom of a 60 px bar.
+    const STRIP: (u32, u32) = (42, 60);
+
+    #[test]
+    fn no_time_label_is_drawn_when_nothing_is_dragged() {
+        let mut app = two_double_classes();
+        let canvas = drawn(&mut app, NOW);
+        assert_eq!(ink_box(&canvas, 300, 400, STRIP.0, STRIP.1), None);
+    }
+
+    #[test]
+    fn dragging_a_zone_boundary_shows_its_start_time_small_at_the_bottom() {
+        let mut app = two_double_classes();
+        // The orange boundary of the first block is at 35 minutes = 350 px (09:35).
+        assert!(app.grab_at(MON, NOW, 350, 1000, 60));
+        let canvas = drawn(&mut app, NOW);
+        let label =
+            ink_box(&canvas, 250, 450, STRIP.0, STRIP.1).expect("a time label under the handle");
+        assert!((centre(label) - 350.0).abs() <= 12.0, "{label:?}");
+        // It is smaller than the countdown.
+        let countdown = ink_box(&canvas, 0, 1000, 0, STRIP.0).expect("countdown");
+        let (small, large) = (label.3 - label.2 + 1, countdown.3 - countdown.2 + 1);
+        assert!(
+            small * 3 <= large * 2,
+            "label {small} px high, countdown {large} px"
+        );
+        // The countdown is still there and is not disturbed.
+        assert!((centre(countdown) - 225.0).abs() <= 8.0, "{countdown:?}");
+
+        // It shows the new time while the boundary moves (3 minutes later is 09:38), and
+        // different digits mean different pixels.
+        let before = canvas.pixels().to_vec();
+        app.move_grab(30);
+        let after = drawn(&mut app, NOW);
+        assert_ne!(before, after.pixels(), "the label changed with the drag");
+        let moved = ink_box(&after, 250, 450, STRIP.0, STRIP.1).expect("label");
+        assert!(
+            (centre(moved) - 380.0).abs() <= 12.0,
+            "it follows the handle: {moved:?}"
+        );
+    }
+
+    #[test]
+    fn dragging_the_break_shows_when_it_starts_and_ends() {
+        let mut app = two_double_classes();
+        assert!(app.grab_at(MON, NOW, 500, 1000, 60));
+        let canvas = drawn(&mut app, NOW);
+        let label = ink_box(&canvas, 400, 600, STRIP.0, STRIP.1).expect("a label");
+        // "09:45-09:55" is wider than a single time and centred under the break.
+        assert!((centre(label) - 500.0).abs() <= 12.0, "{label:?}");
+        let zone = {
+            let mut app = two_double_classes();
+            assert!(app.grab_at(MON, NOW, 350, 1000, 60));
+            ink_box(&drawn(&mut app, NOW), 250, 450, STRIP.0, STRIP.1).unwrap()
+        };
+        assert!(
+            label.1 - label.0 > (zone.1 - zone.0) * 3 / 2,
+            "break {label:?} vs time {zone:?}"
+        );
+    }
+
+    #[test]
+    fn the_time_label_goes_away_when_the_drag_ends() {
+        let mut app = two_double_classes();
+        assert!(app.grab_at(MON, NOW, 350, 1000, 60));
+        app.move_grab(20);
+        assert!(ink_box(&drawn(&mut app, NOW), 250, 450, STRIP.0, STRIP.1).is_some());
+        app.grab_end();
+        assert_eq!(
+            ink_box(&drawn(&mut app, NOW), 250, 450, STRIP.0, STRIP.1),
+            None
+        );
+    }
+
+    #[test]
+    fn the_time_label_stays_on_the_bar_near_its_ends() {
+        let mut app = two_double_classes();
+        // The red boundary of the second block is at 95 minutes = 950 px, near the right end.
+        assert!(app.grab_at(MON, NOW, 950, 1000, 60));
+        let canvas = drawn(&mut app, NOW);
+        let label = ink_box(&canvas, 800, 1000, STRIP.0, STRIP.1).expect("label");
+        assert!(label.1 < 1000, "{label:?}");
+        assert!(label.0 > 850, "{label:?}");
+    }
+
+    #[test]
+    fn no_time_label_is_drawn_for_another_days_drag() {
+        let mut app = two_double_classes();
+        assert!(app.grab_at(MON, NOW, 350, 1000, 60));
+        let mut canvas = Canvas::new(1000, 60);
+        // Tuesday has no classes, so nothing is drawn at all, and certainly not the label.
+        assert!(!app.draw_at(&mut canvas, Weekday::Tue, NOW));
+        assert_eq!(ink_box(&canvas, 0, 1000, 0, 60), None);
     }
 
     #[test]

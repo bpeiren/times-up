@@ -18,10 +18,12 @@ Getting started
 The bar
 -------
 - It appears 5 minutes before a class and disappears shortly after the last class ends.
-- The text shows the time left in the current block, or "Break mm:ss" during the break.
+- The text shows the time left in the current block, centred in that block, or "Break mm:ss" on the
+  break.
 - Drag it to move it. Drag its edges or corners to resize it. Its place and size are remembered.
 - Drag the break, or the thin orange and red lines, to change them for the class that is running.
-  Such a change is forgotten when the class is over.
+  While you drag, a small time at the bottom of the bar shows when it starts (and ends). Such a
+  change is forgotten when the class is over.
 - Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
     Open config (Notepad)           opens times-up.toml
