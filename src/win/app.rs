@@ -400,7 +400,7 @@ pub fn run() -> i32 {
         width: rect.w as u32,
         height: rect.h as u32,
     };
-    match window::create(placement, Box::new(App::new(config, Some(file)))) {
+    match window::create_with_tray(placement, Box::new(App::new(config, Some(file)))) {
         Ok(_) => window::run_message_loop(),
         Err(e) => {
             eprintln!("cannot create the window: {e}");

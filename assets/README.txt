@@ -9,8 +9,11 @@ Getting started
 ---------------
 1. Put times-up.exe and times-up.toml in any folder (a USB stick works too) and start
    times-up.exe. There is nothing to install.
-2. Open times-up.toml (right-click the bar > Open config) and set the classes for each weekday.
-   Save the file: the bar picks up the change by itself.
+2. You will not see the bar yet: it only shows during class times (and 5 minutes before), and the
+   sample times-up.toml has morning classes only. A small icon appears in the notification area
+   (maybe behind the ^ arrow) to show that the app is running. Click it and choose
+   "Open config (Notepad)", then set the classes for each weekday. Save the file: the bar picks up
+   the change by itself.
 
 The bar
 -------
@@ -19,7 +22,7 @@ The bar
 - Drag it to move it. Drag its edges or corners to resize it. Its place and size are remembered.
 - Drag the break, or the thin orange and red lines, to change them for the class that is running.
   Such a change is forgotten when the class is over.
-- Right-click the bar:
+- Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
     Open config (Notepad)           opens times-up.toml
     Start with Windows              starts the bar when you sign in (switch on again if you move

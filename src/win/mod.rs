@@ -6,6 +6,7 @@ pub mod menu;
 pub mod monitors;
 pub mod surface;
 pub mod text;
+pub mod tray;
 pub mod window;
 
 /// `s` as a null-terminated UTF-16 string, as Windows APIs want it.

@@ -12,7 +12,11 @@ all settings in a text file next to it, so it is portable (a USB stick works).
 Download the zip, put `times-up.exe` and `times-up.toml` in any folder and start the exe. The
 `README.txt` in the zip explains the rest; in short:
 
-- The bar appears 5 minutes before a class and hides shortly after the last class ends.
+- The bar appears 5 minutes before a class and hides shortly after the last class ends. **Outside
+  class time you will not see it**: the sample `times-up.toml` only has morning classes (08:30 to
+  12:05), so edit it to your own timetable first.
+- A small icon in the notification area (maybe behind the `^` arrow) shows that the app is running,
+  also when the bar is hidden. Click it for the same menu as a right-click on the bar.
 - The bar fills from the left in green; the last 10 minutes of a block are orange and the last 5 are
   red. Thin lines on the unfilled part show where the colours change.
 - The text shows the time left in the current block, `Break mm:ss` during a break, or
@@ -21,7 +25,8 @@ Download the zip, put `times-up.exe` and `times-up.toml` in any folder and start
 - Drag the break, or an orange or red line, to change it for the class that is running. That change
   is forgotten when the class is over, unless you right-click and choose *Save as default for this
   slot*.
-- Right-click: *Save as default for this slot*, *Open config (Notepad)*, *Start with Windows*, *Quit*.
+- Right-click the bar or click the tray icon: *Save as default for this slot*, *Open config
+  (Notepad)*, *Start with Windows*, *Quit*.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be
@@ -64,10 +69,10 @@ On Windows 11, 2560x1080 at 100 % scaling, release build, a class in progress (`
 
 | | |
 |---|---|
-| `times-up.exe` | 545,280 bytes (about 0.5 MB) |
-| zip (exe + sample config + readme) | 288,901 bytes |
-| Memory, working set | 10.5 MB, of which only 1.9 MB is private; the rest is shared Windows DLL pages |
-| CPU, idle | 0.47 % of one core (one redraw per second), 2 threads |
+| `times-up.exe` | 547,840 bytes (about 0.5 MB) |
+| zip (exe + sample config + readme) | 290,239 bytes |
+| Memory, working set | 11.9 MB, of which only 2.1 MB is private; the rest is shared Windows DLL pages |
+| CPU, idle | 0.42 % of one core (one redraw per second), 2 threads |
 | Disk and registry | nothing outside its own folder, except the optional *Start with Windows* entry |
 
 ## For developers
@@ -116,6 +121,7 @@ logic.
 | `win::window` | The borderless, transparent, always-on-top window and its mouse handling |
 | `win::app` | Start-up, the per-second work, saving, menu commands |
 | `win::menu`, `win::autostart` | The right-click menu and the *Start with Windows* registry entry |
+| `icon`, `win::tray` | The notification-area icon, drawn at run time, and its click handling |
 | `win::text`, `win::monitors`, `win::surface` | GDI text, monitor areas, showing the canvas |
 
 ### Project management

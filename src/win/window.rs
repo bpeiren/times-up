@@ -31,6 +31,7 @@ use windows::core::{PCWSTR, w};
 use super::menu::{self, Command, MenuState};
 use super::monitors;
 use super::surface::Surface;
+use super::tray::{self, Tray};
 use super::wide;
 use crate::canvas::Canvas;
 use crate::interaction::{
@@ -138,6 +139,10 @@ struct State {
     grip: i32,
     min: (i32, i32),
     margin: i32,
+    /// The notification-area icon, when the window has one.
+    tray: Option<Tray>,
+    /// Explorer broadcasts this message when it restarts and the tray icons have to be re-added.
+    taskbar_created: u32,
 }
 
 impl State {
@@ -326,8 +331,25 @@ pub fn dpi_scale() -> f32 {
 }
 
 /// Create and show the window and draw it once. The returned handle stays valid until the
-/// window is destroyed.
+/// window is destroyed. (No tray icon: see [`create_with_tray`].)
 pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core::Result<HWND> {
+    create_inner(placement, handler, false)
+}
+
+/// Like [`create`], and puts an icon in the notification area for as long as the window lives.
+/// Clicking it opens the same menu as a right-click on the bar.
+pub fn create_with_tray(
+    placement: Placement,
+    handler: Box<dyn Handler>,
+) -> windows::core::Result<HWND> {
+    create_inner(placement, handler, true)
+}
+
+fn create_inner(
+    placement: Placement,
+    handler: Box<dyn Handler>,
+    with_tray: bool,
+) -> windows::core::Result<HWND> {
     let surface = Surface::new(placement.width, placement.height)
         .ok_or_else(windows::core::Error::from_thread)?;
     let margin = top_margin();
@@ -340,6 +362,8 @@ pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core:
         grip: ((GRIP as f32 * dpi_scale()) as i32).max(1),
         min: min_size(),
         margin,
+        tray: None,
+        taskbar_created: tray::taskbar_created_message(),
     });
     // SAFETY: standard window creation; see the ownership note below.
     unsafe {
@@ -381,6 +405,9 @@ pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core:
         let raw = Box::into_raw(state);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
         (*raw).redraw(hwnd); // shows the window (or not) and starts the timer
+        if with_tray {
+            (*raw).tray = Tray::add(hwnd);
+        }
         Ok(hwnd)
     }
 }
@@ -446,6 +473,27 @@ unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut State> {
     unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State).as_mut() }
 }
 
+/// Show the menu at the pointer and carry out the choice (from a right-click on the bar or a click
+/// on the tray icon).
+///
+/// Read what the menu needs, then let go of the state: the menu runs its own message loop, which
+/// keeps delivering timer ticks to this window.
+///
+/// # Safety
+/// Only valid on the window's own thread, between `create` and WM_NCDESTROY.
+unsafe fn show_menu(hwnd: HWND) {
+    // SAFETY: see `state_of`; the borrow ends with this statement.
+    let menu_state = match unsafe { state_of(hwnd) } {
+        Some(state) if state.drag.is_none() => state.handler.menu_state(),
+        _ => return,
+    };
+    if let Some(command) = menu::show(hwnd, menu_state)
+        && let Some(problem) = execute(hwnd, command)
+    {
+        report_error(&problem);
+    }
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -455,7 +503,22 @@ unsafe extern "system" fn window_proc(
     // SAFETY: see `state_of`; every borrow of the state ends before the next Win32 call that may
     // dispatch a message to this window.
     unsafe {
+        // Explorer restarted: its tray icons are gone, so put ours back.
+        if let Some(state) = state_of(hwnd)
+            && msg == state.taskbar_created
+        {
+            if let Some(tray) = &state.tray {
+                tray.readd();
+            }
+            return LRESULT(0);
+        }
         match msg {
+            tray::CALLBACK_MESSAGE => {
+                if tray::opens_menu(lparam.0) {
+                    show_menu(hwnd);
+                }
+                return LRESULT(0);
+            }
             WM_TIMER if wparam.0 == TIMER_ID => {
                 if let Some(state) = state_of(hwnd) {
                     state.redraw(hwnd);
@@ -496,17 +559,7 @@ unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
             WM_RBUTTONUP => {
-                // Read what the menu needs, then let go of the state: the menu runs its own message
-                // loop, which keeps delivering timer ticks to this window.
-                let menu_state = match state_of(hwnd) {
-                    Some(state) if state.drag.is_none() => state.handler.menu_state(),
-                    _ => return LRESULT(0),
-                };
-                if let Some(command) = menu::show(hwnd, menu_state)
-                    && let Some(problem) = execute(hwnd, command)
-                {
-                    report_error(&problem);
-                }
+                show_menu(hwnd);
                 return LRESULT(0);
             }
             // Capture taken away (e.g. another window grabbed it): the drag is over.
@@ -532,6 +585,10 @@ unsafe extern "system" fn window_proc(
                 }
             }
             WM_DESTROY => {
+                // Take the icon out of the tray now; dropping it removes it.
+                if let Some(state) = state_of(hwnd) {
+                    state.tray = None;
+                }
                 PostQuitMessage(0);
                 return LRESULT(0);
             }
@@ -1260,6 +1317,123 @@ mod tests {
         g.bar.send(WM_LBUTTONUP, 150, 20);
         g.bar.send(WM_MOUSEMOVE, 150, 20);
         assert!(g.log().is_empty());
+    }
+
+    // ---- the tray icon ----
+
+    #[test]
+    fn a_window_with_a_tray_has_an_icon_for_as_long_as_it_lives() {
+        enable_dpi_awareness();
+        let hwnd = create_with_tray(
+            Placement {
+                x: Some(0),
+                y: Some(0),
+                width: 50,
+                height: 20,
+            },
+            Box::new(Switch {
+                visible: Rc::new(Cell::new(false)),
+                tick_ms: Rc::new(Cell::new(1000)),
+            }),
+        )
+        .unwrap();
+        let rect = tray::icon_rect(hwnd).expect("an icon, although the bar is hidden");
+        assert!(rect.right > rect.left, "{rect:?}");
+        destroy(hwnd);
+        assert!(tray::icon_rect(hwnd).is_none(), "removed with the window");
+    }
+
+    #[test]
+    fn a_plain_window_has_no_tray_icon() {
+        let draws = Rc::new(Cell::new(0));
+        let hwnd = make(&draws);
+        assert!(tray::icon_rect(hwnd).is_none());
+        destroy(hwnd);
+    }
+
+    #[test]
+    fn the_tray_icon_comes_back_when_explorer_restarts() {
+        enable_dpi_awareness();
+        let hwnd = create_with_tray(
+            Placement {
+                x: Some(0),
+                y: Some(0),
+                width: 50,
+                height: 20,
+            },
+            Box::new(Counting {
+                draws: Rc::new(Cell::new(0)),
+            }),
+        )
+        .unwrap();
+        assert!(tray::icon_rect(hwnd).is_some());
+        // Explorer restarting wipes the icons; simulate it by removing ours behind the app's back.
+        tray::remove_icon_behind_the_apps_back(hwnd);
+        assert!(tray::icon_rect(hwnd).is_none());
+        // SAFETY: synchronous message to our own window on this thread.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                tray::taskbar_created_message(),
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
+        }
+        assert!(
+            tray::icon_rect(hwnd).is_some(),
+            "added again after the broadcast"
+        );
+        destroy(hwnd);
+        assert!(tray::icon_rect(hwnd).is_none());
+    }
+
+    #[test]
+    fn the_explorer_broadcast_is_harmless_for_a_window_without_a_tray() {
+        let draws = Rc::new(Cell::new(0));
+        let hwnd = make(&draws);
+        // SAFETY: synchronous message to our own window on this thread.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                tray::taskbar_created_message(),
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
+        }
+        assert!(tray::icon_rect(hwnd).is_none(), "still no icon");
+        destroy(hwnd);
+    }
+
+    #[test]
+    fn pointer_messages_that_are_not_clicks_leave_the_tray_icon_alone() {
+        enable_dpi_awareness();
+        let hwnd = create_with_tray(
+            Placement {
+                x: Some(0),
+                y: Some(0),
+                width: 50,
+                height: 20,
+            },
+            Box::new(Counting {
+                draws: Rc::new(Cell::new(0)),
+            }),
+        )
+        .unwrap();
+        // Hovering and pressing (but not releasing) must not pop up the modal menu.
+        for message in [WM_MOUSEMOVE, WM_LBUTTONDOWN] {
+            // SAFETY: synchronous message to our own window on this thread.
+            let result = unsafe {
+                SendMessageW(
+                    hwnd,
+                    tray::CALLBACK_MESSAGE,
+                    Some(WPARAM(1)),
+                    Some(LPARAM(message as isize)),
+                )
+            };
+            assert_eq!(result.0, 0);
+        }
+        assert!(tray::icon_rect(hwnd).is_some());
+        destroy(hwnd);
     }
 
     #[test]
