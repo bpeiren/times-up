@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo add:*)",
+      "Bash(rustup component:*)",
+      "Bash(backlog:*)",
+      "Bash(groma:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "PowerShell(cargo build:*)",
+      "PowerShell(cargo run:*)",
+      "PowerShell(cargo test:*)",
+      "PowerShell(cargo check:*)",
+      "PowerShell(cargo clippy:*)",
+      "PowerShell(cargo fmt:*)",
+      "PowerShell(cargo add:*)",
+      "PowerShell(backlog:*)",
+      "PowerShell(groma:*)",
+      "PowerShell(git status:*)",
+      "PowerShell(git diff:*)",
+      "PowerShell(git log:*)",
+      "PowerShell(git add:*)",
+      "PowerShell(git commit:*)"
+    ]
+  }
+}

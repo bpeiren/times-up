@@ -1,0 +1,16 @@
+{
+  "scanners": [
+    {
+      "id": "rust",
+      "source": "@groma/scanner-rust@0.2.1",
+      "include": [
+        "**/*.rs",
+        "**/Cargo.toml"
+      ],
+      "exclude": [
+        "target/",
+        "vendor/"
+      ]
+    }
+  ]
+}
