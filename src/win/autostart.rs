@@ -179,7 +179,7 @@ mod tests {
     impl Scratch {
         fn new(label: &str) -> Self {
             Self(format!(
-                r"Software\TimesUpTest\{}-{label}",
+                r"Software\TimesUpTest-{}-{label}",
                 std::process::id()
             ))
         }
@@ -191,11 +191,10 @@ mod tests {
 
     impl Drop for Scratch {
         fn drop(&mut self) {
-            let (sub, parent) = (wide(&self.0), wide(r"Software\TimesUpTest"));
-            // SAFETY: deleting keys we created for the test.
+            let sub = wide(&self.0);
+            // SAFETY: deleting the key we created for the test.
             unsafe {
                 let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(sub.as_ptr()));
-                let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(parent.as_ptr()));
             }
         }
     }
@@ -265,7 +264,7 @@ mod tests {
     fn a_failing_registry_write_reports_an_error_and_changes_nothing() {
         // Registry key names are limited to 255 characters, so this key can never be created.
         let long = "x".repeat(300);
-        let sub = format!(r"Software\TimesUpTest\{long}");
+        let sub = format!(r"Software\{long}");
         let a = Autostart::with_key(HKEY_CURRENT_USER, &sub, "TimesUp", EXE);
         let err = a.enable().expect_err("must fail");
         assert!(!err.is_empty());

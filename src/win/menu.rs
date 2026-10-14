@@ -2,20 +2,23 @@
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_CHECKED, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, PostMessageW, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MENU_ITEM_FLAGS, MF_CHECKED,
+    MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
 };
 use windows::core::PCWSTR;
 
 use super::wide;
 
+pub const LABEL_SAVE_DEFAULT: &str = "Save as default for this slot";
 pub const LABEL_OPEN_CONFIG: &str = "Open config (Notepad)";
 pub const LABEL_AUTOSTART: &str = "Start with Windows";
 pub const LABEL_QUIT: &str = "Quit";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    /// Store the break and warning thresholds of the current class as its defaults.
+    SaveDefault,
     /// Open `times-up.toml` in Notepad.
     OpenConfig,
     /// Add or remove the "start with Windows" entry.
@@ -29,6 +32,7 @@ impl Command {
             Command::OpenConfig => 1,
             Command::ToggleAutostart => 2,
             Command::Quit => 3,
+            Command::SaveDefault => 4,
         }
     }
 
@@ -37,38 +41,54 @@ impl Command {
             1 => Some(Command::OpenConfig),
             2 => Some(Command::ToggleAutostart),
             3 => Some(Command::Quit),
+            4 => Some(Command::SaveDefault),
             _ => None,
         }
     }
 }
 
-/// The popup menu; "Start with Windows" carries a check mark when `autostart` is on. The caller
-/// owns the menu and destroys it.
-pub fn build(autostart: bool) -> Option<HMENU> {
+/// What the menu needs to know to look right.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MenuState {
+    /// "Start with Windows" is on (gets a check mark).
+    pub autostart: bool,
+    /// The current class has changes that can be saved as its defaults (otherwise the entry is
+    /// greyed out).
+    pub can_save_default: bool,
+}
+
+/// The popup menu. The caller owns it and destroys it.
+pub fn build(state: MenuState) -> Option<HMENU> {
     // SAFETY: plain menu creation; the strings outlive each call.
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let check = if autostart { MF_CHECKED } else { MF_UNCHECKED };
-        let open = wide(LABEL_OPEN_CONFIG);
-        let auto = wide(LABEL_AUTOSTART);
-        let quit = wide(LABEL_QUIT);
-        let ok = AppendMenuW(
-            menu,
-            MF_STRING,
-            Command::OpenConfig.id(),
-            PCWSTR(open.as_ptr()),
-        )
-        .and_then(|()| {
-            AppendMenuW(
-                menu,
-                MF_STRING | check,
-                Command::ToggleAutostart.id(),
-                PCWSTR(auto.as_ptr()),
-            )
-        })
-        .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
-        .and_then(|()| AppendMenuW(menu, MF_STRING, Command::Quit.id(), PCWSTR(quit.as_ptr())));
-        if ok.is_err() {
+        let add = |flags: MENU_ITEM_FLAGS, command: Option<Command>, label: &str| {
+            let text = wide(label);
+            let id = command.map_or(0, Command::id);
+            let text = if flags == MF_SEPARATOR {
+                PCWSTR::null()
+            } else {
+                PCWSTR(text.as_ptr())
+            };
+            AppendMenuW(menu, flags, id, text)
+        };
+        let save = if state.can_save_default {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        let auto = if state.autostart {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let built = add(save, Some(Command::SaveDefault), LABEL_SAVE_DEFAULT)
+            .and_then(|()| add(MF_SEPARATOR, None, ""))
+            .and_then(|()| add(MF_STRING, Some(Command::OpenConfig), LABEL_OPEN_CONFIG))
+            .and_then(|()| add(auto, Some(Command::ToggleAutostart), LABEL_AUTOSTART))
+            .and_then(|()| add(MF_SEPARATOR, None, ""))
+            .and_then(|()| add(MF_STRING, Some(Command::Quit), LABEL_QUIT));
+        if built.is_err() {
             let _ = DestroyMenu(menu);
             return None;
         }
@@ -78,8 +98,8 @@ pub fn build(autostart: bool) -> Option<HMENU> {
 
 /// Show the menu at the pointer and wait for a choice. Blocks (in the system's menu loop, which
 /// keeps dispatching messages such as the timer) until the menu closes.
-pub fn show(hwnd: HWND, autostart: bool) -> Option<Command> {
-    let menu = build(autostart)?;
+pub fn show(hwnd: HWND, state: MenuState) -> Option<Command> {
+    let menu = build(state)?;
     let mut pos = POINT::default();
     // SAFETY: our own window and menu; the menu is destroyed before returning.
     let chosen = unsafe {
@@ -123,49 +143,81 @@ mod tests {
         unsafe { GetMenuState(menu, position, MF_BYPOSITION) }
     }
 
-    #[test]
-    fn menu_has_open_config_autostart_and_quit() {
-        let menu = build(false).expect("menu");
-        // SAFETY: reading and destroying a menu we built.
+    fn destroy(menu: HMENU) {
+        // SAFETY: destroying a menu we built.
         unsafe {
-            assert_eq!(
-                GetMenuItemCount(Some(menu)),
-                4,
-                "three entries and a separator"
-            );
-            assert_eq!(label(menu, 0), LABEL_OPEN_CONFIG);
-            assert_eq!(label(menu, 1), LABEL_AUTOSTART);
-            assert_eq!(state(menu, 2) & MF_SEPARATOR.0, MF_SEPARATOR.0);
-            assert_eq!(label(menu, 3), LABEL_QUIT);
             let _ = DestroyMenu(menu);
         }
     }
 
     #[test]
+    fn menu_has_save_open_config_autostart_and_quit() {
+        let menu = build(MenuState::default()).expect("menu");
+        // SAFETY: reading a menu we built.
+        let count = unsafe { GetMenuItemCount(Some(menu)) };
+        assert_eq!(count, 6, "four entries and two separators");
+        assert_eq!(label(menu, 0), LABEL_SAVE_DEFAULT);
+        assert_eq!(state(menu, 1) & MF_SEPARATOR.0, MF_SEPARATOR.0);
+        assert_eq!(label(menu, 2), LABEL_OPEN_CONFIG);
+        assert_eq!(label(menu, 3), LABEL_AUTOSTART);
+        assert_eq!(state(menu, 4) & MF_SEPARATOR.0, MF_SEPARATOR.0);
+        assert_eq!(label(menu, 5), LABEL_QUIT);
+        destroy(menu);
+    }
+
+    #[test]
     fn the_autostart_entry_is_checked_only_when_it_is_on() {
         for (on, expected) in [(false, 0), (true, MF_CHECKED.0)] {
-            let menu = build(on).unwrap();
-            assert_eq!(state(menu, 1) & MF_CHECKED.0, expected, "autostart = {on}");
-            assert_eq!(
-                state(menu, 0) & MF_CHECKED.0,
-                0,
-                "the other entries are never checked"
-            );
-            assert_eq!(state(menu, 3) & MF_CHECKED.0, 0);
-            // SAFETY: destroying a menu we built.
-            unsafe {
-                let _ = DestroyMenu(menu);
+            let menu = build(MenuState {
+                autostart: on,
+                can_save_default: false,
+            })
+            .unwrap();
+            assert_eq!(state(menu, 3) & MF_CHECKED.0, expected, "autostart = {on}");
+            for other in [0, 2, 5] {
+                assert_eq!(
+                    state(menu, other) & MF_CHECKED.0,
+                    0,
+                    "entry {other} is never checked"
+                );
             }
+            destroy(menu);
+        }
+    }
+
+    #[test]
+    fn save_as_default_is_greyed_out_unless_there_is_something_to_save() {
+        for (can, grayed) in [(false, MF_GRAYED.0), (true, 0)] {
+            let menu = build(MenuState {
+                autostart: false,
+                can_save_default: can,
+            })
+            .unwrap();
+            assert_eq!(
+                state(menu, 0) & MF_GRAYED.0,
+                grayed,
+                "can_save_default = {can}"
+            );
+            // The other entries are always usable.
+            for other in [2, 3, 5] {
+                assert_eq!(state(menu, other) & MF_GRAYED.0, 0, "entry {other}");
+            }
+            destroy(menu);
         }
     }
 
     #[test]
     fn command_ids_round_trip() {
-        for cmd in [Command::OpenConfig, Command::ToggleAutostart, Command::Quit] {
+        for cmd in [
+            Command::SaveDefault,
+            Command::OpenConfig,
+            Command::ToggleAutostart,
+            Command::Quit,
+        ] {
             assert_eq!(Command::from_id(cmd.id()), Some(cmd));
         }
         // 0 is what the menu returns when it is dismissed without a choice.
         assert_eq!(Command::from_id(0), None);
-        assert_eq!(Command::from_id(4), None);
+        assert_eq!(Command::from_id(5), None);
     }
 }

@@ -28,7 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::menu::{self, Command};
+use super::menu::{self, Command, MenuState};
 use super::monitors;
 use super::surface::Surface;
 use super::wide;
@@ -63,14 +63,33 @@ pub trait Handler {
     /// The user finished moving or resizing the window; `rect` is its place in screen pixels.
     fn window_changed(&mut self, _rect: Rect) {}
 
-    /// Whether "Start with Windows" is on, for the check mark in the right-click menu.
-    fn autostart_enabled(&self) -> bool {
-        false
+    /// How the right-click menu should look (check marks, greyed-out entries).
+    fn menu_state(&self) -> MenuState {
+        MenuState::default()
     }
 
     /// A menu command other than Quit (which the window handles itself). Returns the text of an
     /// error to show to the user, if something went wrong.
     fn run_command(&mut self, _command: Command) -> Option<String> {
+        None
+    }
+
+    /// The button went down on the body of the bar at `(x, y)` (a window of `w` x `h`). Return
+    /// `true` to take the drag for something on the bar (the break, a zone boundary) instead of
+    /// moving the window. Window edges are never offered: they always resize.
+    fn grab(&mut self, _x: i32, _y: i32, _w: i32, _h: i32) -> bool {
+        false
+    }
+
+    /// The pointer is `dx` pixels to the right of where a taken drag started; the bar is repainted
+    /// afterwards.
+    fn grab_move(&mut self, _dx: i32) {}
+
+    /// A taken drag ended.
+    fn grab_end(&mut self) {}
+
+    /// The cursor to show over something draggable on the bar at `(x, y)`.
+    fn hover(&self, _x: i32, _y: i32, _w: i32, _h: i32) -> Option<CursorShape> {
         None
     }
 }
@@ -106,6 +125,8 @@ struct Drag {
     start_screen: (i32, i32),
     /// The window rectangle at that moment.
     start_rect: Rect,
+    /// When the handler took the drag for something on the bar: the client x where it started.
+    grabbed: Option<i32>,
 }
 
 struct State {
@@ -181,10 +202,15 @@ impl State {
 
     fn begin_drag(&mut self, hwnd: HWND, client: (i32, i32)) {
         let rect = window_rect(hwnd);
+        let hit = hit_test(client.0, client.1, rect.w, rect.h, self.grip);
+        // The edges always resize the window; only the body can be taken for something on the bar.
+        let grabbed = (hit == Hit::Move && self.handler.grab(client.0, client.1, rect.w, rect.h))
+            .then_some(client.0);
         self.drag = Some(Drag {
-            hit: hit_test(client.0, client.1, rect.w, rect.h, self.grip),
+            hit,
             start_screen: (rect.x + client.0, rect.y + client.1),
             start_rect: rect,
+            grabbed,
         });
     }
 
@@ -192,6 +218,11 @@ impl State {
         let Some(drag) = self.drag else {
             return;
         };
+        if let Some(start_x) = drag.grabbed {
+            self.handler.grab_move(client.0 - start_x);
+            self.paint(hwnd);
+            return;
+        }
         let cur = window_rect(hwnd);
         // The pointer in screen coordinates; the window may already have moved under it.
         let (sx, sy) = (cur.x + client.0, cur.y + client.1);
@@ -210,6 +241,10 @@ impl State {
     /// Finish a drag; tells the handler when the window ended up somewhere else.
     fn end_drag(&mut self, hwnd: HWND) {
         if let Some(drag) = self.drag.take() {
+            if drag.grabbed.is_some() {
+                self.handler.grab_end();
+                return;
+            }
             let now = window_rect(hwnd);
             if now != drag.start_rect {
                 self.handler.window_changed(now);
@@ -228,7 +263,11 @@ impl State {
 
     fn cursor_shape(&self, hwnd: HWND) -> CursorShape {
         if let Some(drag) = self.drag {
-            return drag.hit.cursor();
+            return if drag.grabbed.is_some() {
+                CursorShape::SizeWestEast
+            } else {
+                drag.hit.cursor()
+            };
         }
         let rect = window_rect(hwnd);
         let mut pos = POINT::default();
@@ -236,7 +275,14 @@ impl State {
         if unsafe { GetCursorPos(&mut pos) }.is_err() {
             return CursorShape::Arrow;
         }
-        hit_test(pos.x - rect.x, pos.y - rect.y, rect.w, rect.h, self.grip).cursor()
+        let (x, y) = (pos.x - rect.x, pos.y - rect.y);
+        match hit_test(x, y, rect.w, rect.h, self.grip) {
+            Hit::Move => self
+                .handler
+                .hover(x, y, rect.w, rect.h)
+                .unwrap_or(CursorShape::Arrow),
+            edge => edge.cursor(),
+        }
     }
 }
 
@@ -452,11 +498,11 @@ unsafe extern "system" fn window_proc(
             WM_RBUTTONUP => {
                 // Read what the menu needs, then let go of the state: the menu runs its own message
                 // loop, which keeps delivering timer ticks to this window.
-                let autostart = match state_of(hwnd) {
-                    Some(state) if state.drag.is_none() => state.handler.autostart_enabled(),
+                let menu_state = match state_of(hwnd) {
+                    Some(state) if state.drag.is_none() => state.handler.menu_state(),
                     _ => return LRESULT(0),
                 };
-                if let Some(command) = menu::show(hwnd, autostart)
+                if let Some(command) = menu::show(hwnd, menu_state)
                     && let Some(problem) = execute(hwnd, command)
                 {
                     report_error(&problem);
@@ -964,8 +1010,11 @@ mod tests {
             true
         }
 
-        fn autostart_enabled(&self) -> bool {
-            self.autostart
+        fn menu_state(&self) -> MenuState {
+            MenuState {
+                autostart: self.autostart,
+                can_save_default: false,
+            }
         }
 
         fn run_command(&mut self, command: Command) -> Option<String> {
@@ -1029,9 +1078,188 @@ mod tests {
         assert_eq!(execute(hwnd, Command::OpenConfig), None);
         assert_eq!(execute(hwnd, Command::ToggleAutostart), None);
         destroy(hwnd);
-        // The default handler also says autostart is off.
+        // The default handler has a plain menu: nothing checked, nothing to save.
         let handler = Counting { draws };
-        assert!(!handler.autostart_enabled());
+        assert_eq!(handler.menu_state(), MenuState::default());
+    }
+
+    // ---- dragging things on the bar ----
+
+    /// A handler that can take body drags and logs everything it is told.
+    struct Grabber {
+        takes: Rc<Cell<bool>>,
+        log: Rc<RefCell<Vec<String>>>,
+        draws: Rc<Cell<u32>>,
+    }
+
+    impl Handler for Grabber {
+        fn draw(&mut self, _: &mut Canvas) -> bool {
+            self.draws.set(self.draws.get() + 1);
+            true
+        }
+
+        fn window_changed(&mut self, rect: Rect) {
+            self.log.borrow_mut().push(format!("window {rect:?}"));
+        }
+
+        fn grab(&mut self, x: i32, y: i32, w: i32, h: i32) -> bool {
+            self.log.borrow_mut().push(format!("grab {x},{y} {w}x{h}"));
+            self.takes.get()
+        }
+
+        fn grab_move(&mut self, dx: i32) {
+            self.log.borrow_mut().push(format!("move {dx}"));
+        }
+
+        fn grab_end(&mut self) {
+            self.log.borrow_mut().push("end".to_string());
+        }
+
+        fn hover(&self, x: i32, _: i32, _: i32, _: i32) -> Option<CursorShape> {
+            (100..120).contains(&x).then_some(CursorShape::SizeWestEast)
+        }
+    }
+
+    struct GrabBar {
+        bar: Bar,
+        takes: Rc<Cell<bool>>,
+        log: Rc<RefCell<Vec<String>>>,
+        draws: Rc<Cell<u32>>,
+    }
+
+    impl GrabBar {
+        /// A 300 x 40 bar at (200, 200) whose handler takes body drags when `takes` is set.
+        fn new(takes: bool) -> Self {
+            enable_dpi_awareness();
+            let takes = Rc::new(Cell::new(takes));
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let draws = Rc::new(Cell::new(0));
+            let hwnd = create(
+                Placement {
+                    x: Some(200),
+                    y: Some(200),
+                    width: 300,
+                    height: 40,
+                },
+                Box::new(Grabber {
+                    takes: takes.clone(),
+                    log: log.clone(),
+                    draws: draws.clone(),
+                }),
+            )
+            .unwrap();
+            Self {
+                bar: Bar {
+                    hwnd,
+                    changes: Rc::new(RefCell::new(Vec::new())),
+                    canvas_size: Rc::new(Cell::new((0, 0))),
+                },
+                takes,
+                log,
+                draws,
+            }
+        }
+
+        fn log(&self) -> Vec<String> {
+            self.log.borrow().clone()
+        }
+    }
+
+    #[test]
+    fn a_drag_the_handler_takes_does_not_move_the_window() {
+        let g = GrabBar::new(true);
+        let drawn = g.draws.get();
+        g.bar.send(WM_LBUTTONDOWN, 150, 20);
+        g.bar.send(WM_MOUSEMOVE, 170, 20);
+        g.bar.send(WM_MOUSEMOVE, 135, 20);
+        g.bar.send(WM_LBUTTONUP, 135, 20);
+        assert_eq!(
+            g.log(),
+            vec!["grab 150,20 300x40", "move 20", "move -15", "end"]
+        );
+        assert_eq!(
+            g.bar.rect(),
+            Rect::new(200, 200, 300, 40),
+            "the window stayed put"
+        );
+        assert_eq!(g.draws.get(), drawn + 2, "repainted after every move");
+        assert!(!g.bar.has_capture());
+    }
+
+    #[test]
+    fn a_drag_the_handler_declines_moves_the_window_as_before() {
+        let g = GrabBar::new(false);
+        g.bar.send(WM_LBUTTONDOWN, 150, 20);
+        g.bar.send(WM_MOUSEMOVE, 180, 30);
+        g.bar.send(WM_LBUTTONUP, 180, 30);
+        assert_eq!(g.bar.rect(), Rect::new(230, 210, 300, 40));
+        assert_eq!(
+            g.log(),
+            vec![
+                "grab 150,20 300x40",
+                "window Rect { x: 230, y: 210, w: 300, h: 40 }"
+            ],
+            "offered once, then an ordinary window drag"
+        );
+    }
+
+    #[test]
+    fn window_edges_are_never_offered_to_the_handler() {
+        let g = GrabBar::new(true);
+        g.bar.send(WM_LBUTTONDOWN, 298, 20); // right edge
+        g.bar.send(WM_MOUSEMOVE, 348, 20);
+        g.bar.send(WM_LBUTTONUP, 348, 20);
+        assert_eq!(g.bar.rect(), Rect::new(200, 200, 350, 40), "resized");
+        assert!(
+            !g.log().iter().any(|l| l.starts_with("grab")),
+            "{:?}",
+            g.log()
+        );
+        // The top edge too.
+        g.bar.send(WM_LBUTTONDOWN, 150, 2);
+        g.bar.send(WM_LBUTTONUP, 150, 2);
+        assert!(!g.log().iter().any(|l| l.starts_with("grab")));
+    }
+
+    #[test]
+    fn the_decision_is_made_per_drag() {
+        let g = GrabBar::new(true);
+        g.bar.send(WM_LBUTTONDOWN, 150, 20);
+        g.bar.send(WM_LBUTTONUP, 150, 20);
+        g.takes.set(false);
+        g.bar.send(WM_LBUTTONDOWN, 150, 20);
+        g.bar.send(WM_MOUSEMOVE, 160, 20);
+        g.bar.send(WM_LBUTTONUP, 160, 20);
+        assert_eq!(
+            g.bar.rect(),
+            Rect::new(210, 200, 300, 40),
+            "the second drag moved the window"
+        );
+        let log = g.log();
+        assert_eq!(log[0], "grab 150,20 300x40");
+        assert_eq!(
+            log[1], "end",
+            "a taken click without movement still ends cleanly"
+        );
+    }
+
+    #[test]
+    fn losing_the_capture_ends_a_taken_drag_once() {
+        let g = GrabBar::new(true);
+        g.bar.send(WM_LBUTTONDOWN, 150, 20);
+        g.bar.send(WM_MOUSEMOVE, 160, 20);
+        g.bar.send(WM_CAPTURECHANGED, 0, 0);
+        g.bar.send(WM_MOUSEMOVE, 190, 20);
+        g.bar.send(WM_LBUTTONUP, 190, 20);
+        assert_eq!(g.log(), vec!["grab 150,20 300x40", "move 10", "end"]);
+    }
+
+    #[test]
+    fn a_stray_button_release_tells_the_handler_nothing() {
+        let g = GrabBar::new(true);
+        g.bar.send(WM_LBUTTONUP, 150, 20);
+        g.bar.send(WM_MOUSEMOVE, 150, 20);
+        assert!(g.log().is_empty());
     }
 
     #[test]

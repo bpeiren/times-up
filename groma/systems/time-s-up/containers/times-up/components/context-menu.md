@@ -14,7 +14,7 @@ groma:
 description: Open config, Start with Windows, Quit
 ---
 
-The few controls a teacher needs without a settings window. Right-clicking the bar shows a popup with Open config (Notepad), Start with Windows (checked when on) and Quit. Start with Windows adds or removes one value in the per-user Run key that launches this exe at sign-in; it only counts as on when it points at this copy of the exe, because the app is portable. A failed change is reported and leaves things as they were.
+The few controls a teacher needs without a settings window. Right-clicking the bar shows a popup with Save as default for this slot (greyed out until the current class has unsaved changes), Open config (Notepad), Start with Windows (checked when on) and Quit. Start with Windows adds or removes one value in the per-user Run key that launches this exe at sign-in; it only counts as on when it points at this copy of the exe, because the app is portable. A failed change is reported and leaves things as they were.
 
 ## Relationships
 

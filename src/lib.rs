@@ -5,6 +5,7 @@
 pub mod bar;
 pub mod canvas;
 pub mod config;
+pub mod editing;
 pub mod interaction;
 pub mod schedule;
 pub mod win;
