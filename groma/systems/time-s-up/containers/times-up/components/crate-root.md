@@ -10,6 +10,7 @@ groma:
       file: src/lib.rs
     - scanner: rust
       file: src/win/mod.rs
+      symbol: wide
 description: Declares the library modules
 ---
 

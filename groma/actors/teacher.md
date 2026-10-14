@@ -13,4 +13,4 @@ A teacher giving lessons who glances at the bar on screen to see how much of the
 | Source | Target | Description | Technology |
 | --- | --- | --- | --- |
 | [teacher](teacher.md) | [time-s-up](../systems/time-s-up/system.md) | Watches the class timer | Screen |
-| [teacher](teacher.md) | [window-host](../systems/time-s-up/containers/times-up/components/window-host.md) | Drags and resizes | Mouse |
+| [teacher](teacher.md) | [window-host](../systems/time-s-up/containers/times-up/components/window-host.md) | Drags, resizes and right-clicks | Mouse |

@@ -17,7 +17,7 @@ groma:
 description: The borderless always-on-top bar window that the teacher moves and resizes
 ---
 
-A popup window with per-pixel alpha, no taskbar button and no focus stealing. A timer, re-armed after each tick, asks the handler to draw into the canvas; the window presents the pixels with `UpdateLayeredWindow`, or hides itself when the handler has nothing to show, and keeps itself on top. It follows the mouse itself (capture): dragging the body moves it and dragging an edge resizes it, and when a drag ends it tells the app the new rectangle. It lists the connected monitors and pulls itself back on screen when the displays change.
+A popup window with per-pixel alpha, no taskbar button and no focus stealing. A timer, re-armed after each tick, asks the handler to draw into the canvas; the window presents the pixels with `UpdateLayeredWindow`, or hides itself when the handler has nothing to show, and keeps itself on top. It follows the mouse itself (capture): dragging the body moves it and dragging an edge resizes it, and when a drag ends it tells the app the new rectangle. A right-click opens the menu and passes the chosen command on (Quit closes the window; failures are shown in a message box). It lists the connected monitors and pulls itself back on screen when the displays change.
 
 ## Relationships
 
@@ -29,3 +29,4 @@ A popup window with per-pixel alpha, no taskbar button and no focus stealing. A 
 | [src/win/window.rs](../../../../../../src/win/window.rs) | [src/win/app.rs](../../../../../../src/win/app.rs) | Asks for a drawing each second | Handler trait |
 | [src/win/window.rs](../../../../../../src/win/window.rs) | [src/interaction.rs](../../../../../../src/interaction.rs) | Asks what a drag does | Rust call |
 | [src/win/monitors.rs](../../../../../../src/win/monitors.rs) | [windows](../../../../../externals/windows.md) | Lists monitors with | EnumDisplayMonitors |
+| [src/win/window.rs](../../../../../../src/win/window.rs) | [src/win/menu.rs](../../../../../../src/win/menu.rs) | Shows the menu with | Rust call |

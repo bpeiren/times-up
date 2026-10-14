@@ -1,8 +1,13 @@
 //! Startup and the per-tick work: load the config, create the window, and each second decide
 //! what the bar shows from the local time and the schedule.
 
+use std::path::{Path, PathBuf};
+use std::process::Command as Process;
+
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
+use super::autostart::Autostart;
+use super::menu::Command;
 use super::monitors;
 use super::text::render_mask;
 use super::window::{self, DEFAULT_HEIGHT, DEFAULT_WIDTH, Handler, Placement};
@@ -17,20 +22,47 @@ const TICK_MARGIN_MS: u32 = 25;
 /// Label height as a share of the bar height.
 const LABEL_SCALE: f32 = 0.5;
 
+/// Opens a file for editing.
+type Opener = Box<dyn Fn(&Path) -> std::io::Result<()>>;
+
+/// What the menu commands act on, so tests can swap in fakes instead of touching the real
+/// registry or starting Notepad.
+struct Services {
+    autostart: Autostart,
+    /// Open the config file for editing.
+    open_config: Opener,
+}
+
+impl Services {
+    fn production() -> Self {
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("times-up.exe"));
+        Self {
+            autostart: Autostart::current_user(exe),
+            open_config: Box::new(|path| Process::new("notepad.exe").arg(path).spawn().map(|_| ())),
+        }
+    }
+}
+
 struct App {
     config: Config,
     /// Where the config came from; polled each tick so edits to the file apply immediately.
     file: Option<ConfigFile>,
     /// Milliseconds past the second at the last tick, used to time the next one.
     last_ms: u32,
+    services: Services,
 }
 
 impl App {
     fn new(config: Config, file: Option<ConfigFile>) -> Self {
+        Self::with_services(config, file, Services::production())
+    }
+
+    fn with_services(config: Config, file: Option<ConfigFile>, services: Services) -> Self {
         Self {
             config,
             file,
             last_ms: 0,
+            services,
         }
     }
 
@@ -76,6 +108,34 @@ impl Handler for App {
         };
         if let Some(file) = &mut self.file {
             let _ = file.save_window(&self.config.window);
+        }
+    }
+
+    fn autostart_enabled(&self) -> bool {
+        self.services.autostart.is_enabled()
+    }
+
+    /// Open the config in Notepad, or turn "Start with Windows" on or off. A failure comes back
+    /// as text for the user and leaves things as they were.
+    fn run_command(&mut self, command: Command) -> Option<String> {
+        match command {
+            Command::OpenConfig => {
+                let path = self
+                    .file
+                    .as_ref()
+                    .map_or_else(config::default_path, |f| f.path().to_path_buf());
+                (self.services.open_config)(&path)
+                    .err()
+                    .map(|e| format!("Could not open {}: {e}", path.display()))
+            }
+            Command::ToggleAutostart => self
+                .services
+                .autostart
+                .toggle()
+                .err()
+                .map(|e| format!("Could not change \"Start with Windows\": {e}")),
+            // The window itself handles Quit.
+            Command::Quit => None,
         }
     }
 }
@@ -466,6 +526,137 @@ mod tests {
         perm.set_readonly(false);
         let _ = fs::set_permissions(&path, perm);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- menu commands ----
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteKeyW};
+    use windows::core::PCWSTR;
+
+    /// Services with a throwaway registry key and an opener that records instead of starting
+    /// Notepad. The key is deleted when this is dropped.
+    struct Fake {
+        subkey: String,
+        opened: Rc<RefCell<Vec<PathBuf>>>,
+    }
+
+    impl Fake {
+        fn new(label: &str) -> Self {
+            Self {
+                subkey: format!(r"Software\TimesUpTest\{}-app-{label}", std::process::id()),
+                opened: Rc::new(RefCell::new(Vec::new())),
+            }
+        }
+
+        fn services(&self, open_fails: bool) -> Services {
+            let opened = self.opened.clone();
+            Services {
+                autostart: Autostart::with_key(
+                    HKEY_CURRENT_USER,
+                    &self.subkey,
+                    "TimesUp",
+                    r"C:\Tools\times-up.exe",
+                ),
+                open_config: Box::new(move |path| {
+                    opened.borrow_mut().push(path.to_path_buf());
+                    if open_fails {
+                        Err(std::io::Error::other("notepad is missing"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+            }
+        }
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            let wide = |s: &str| {
+                s.encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<u16>>()
+            };
+            let (sub, parent) = (wide(&self.subkey), wide(r"Software\TimesUpTest"));
+            // SAFETY: deleting keys this test created.
+            unsafe {
+                let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(sub.as_ptr()));
+                let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(parent.as_ptr()));
+            }
+        }
+    }
+
+    #[test]
+    fn open_config_opens_the_config_file() {
+        let fake = Fake::new("open");
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("times-up-app-open-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut file = ConfigFile::new(dir.join(config::FILE_NAME));
+        let config = file.load_or_create().config;
+        let mut app = App::with_services(config, Some(file), fake.services(false));
+
+        assert_eq!(app.run_command(Command::OpenConfig), None);
+        assert_eq!(*fake.opened.borrow(), vec![dir.join(config::FILE_NAME)]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_config_failure_is_reported_with_the_path_and_the_reason() {
+        let fake = Fake::new("open-fails");
+        let mut app = App::with_services(Config::default(), None, fake.services(true));
+        let message = app.run_command(Command::OpenConfig).expect("a message");
+        assert!(message.contains("Could not open"), "{message}");
+        assert!(message.contains(config::FILE_NAME), "{message}");
+        assert!(message.contains("notepad is missing"), "{message}");
+        // Without a loaded file the standard place next to the exe is opened.
+        assert_eq!(*fake.opened.borrow(), vec![config::default_path()]);
+    }
+
+    #[test]
+    fn start_with_windows_toggles_the_run_entry() {
+        let fake = Fake::new("toggle");
+        let mut app = App::with_services(Config::default(), None, fake.services(false));
+        assert!(!app.autostart_enabled());
+        assert_eq!(app.run_command(Command::ToggleAutostart), None);
+        assert!(
+            app.autostart_enabled(),
+            "the menu would now show a check mark"
+        );
+        assert_eq!(app.run_command(Command::ToggleAutostart), None);
+        assert!(!app.autostart_enabled());
+    }
+
+    #[test]
+    fn a_failing_start_with_windows_toggle_is_reported_and_changes_nothing() {
+        let long = "x".repeat(300);
+        let services = Services {
+            autostart: Autostart::with_key(
+                HKEY_CURRENT_USER,
+                &format!(r"Software\TimesUpTest\{long}"),
+                "TimesUp",
+                r"C:\Tools\times-up.exe",
+            ),
+            open_config: Box::new(|_| Ok(())),
+        };
+        let mut app = App::with_services(Config::default(), None, services);
+        let message = app
+            .run_command(Command::ToggleAutostart)
+            .expect("a message");
+        assert!(message.contains("Start with Windows"), "{message}");
+        assert!(!app.autostart_enabled(), "still off");
+    }
+
+    #[test]
+    fn quit_is_left_to_the_window() {
+        let fake = Fake::new("quit");
+        let mut app = App::with_services(Config::default(), None, fake.services(false));
+        assert_eq!(app.run_command(Command::Quit), None);
+        assert!(fake.opened.borrow().is_empty());
+        assert!(!app.autostart_enabled());
     }
 
     #[test]

@@ -18,17 +18,20 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos,
     GetMessageW, GetWindowLongPtrW, GetWindowRect, HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_SIZENESW,
-    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MSG, PostQuitMessage,
-    RegisterClassExW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MB_ICONWARNING, MB_OK,
+    MB_SETFOREGROUND, MB_TOPMOST, MSG, MessageBoxW, PostQuitMessage, RegisterClassExW, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_CAPTURECHANGED, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
+use super::menu::{self, Command};
 use super::monitors;
 use super::surface::Surface;
+use super::wide;
 use crate::canvas::Canvas;
 use crate::interaction::{
     CursorShape, Hit, Rect, default_rect, drag_rect, fit_on_screen, hit_test,
@@ -59,6 +62,17 @@ pub trait Handler {
 
     /// The user finished moving or resizing the window; `rect` is its place in screen pixels.
     fn window_changed(&mut self, _rect: Rect) {}
+
+    /// Whether "Start with Windows" is on, for the check mark in the right-click menu.
+    fn autostart_enabled(&self) -> bool {
+        false
+    }
+
+    /// A menu command other than Quit (which the window handles itself). Returns the text of an
+    /// error to show to the user, if something went wrong.
+    fn run_command(&mut self, _command: Command) -> Option<String> {
+        None
+    }
 }
 
 /// Where and how large (device pixels) the window starts; `None` means the default position.
@@ -325,6 +339,35 @@ pub fn create(placement: Placement, handler: Box<dyn Handler>) -> windows::core:
     }
 }
 
+/// Carry out a menu command. Returns an error text for the caller to show: it is not shown here
+/// because a message box runs its own message loop and no borrow of the state may be alive then.
+pub fn execute(hwnd: HWND, command: Command) -> Option<String> {
+    match command {
+        Command::Quit => {
+            destroy(hwnd);
+            None
+        }
+        other => {
+            // SAFETY: on the window's thread; the borrow ends with this statement.
+            unsafe { state_of(hwnd) }.and_then(|state| state.handler.run_command(other))
+        }
+    }
+}
+
+/// Tell the user about a failed command.
+fn report_error(text: &str) {
+    let text = wide(text);
+    // SAFETY: modal message box with valid strings; no window borrow is alive.
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            w!("Times Up"),
+            MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
+        );
+    }
+}
+
 /// Destroy the window (used by tests and on quit).
 pub fn destroy(hwnd: HWND) {
     // SAFETY: `hwnd` came from `create` and is destroyed from the thread that owns it.
@@ -406,6 +449,20 @@ unsafe extern "system" fn window_proc(
                 let _ = ReleaseCapture();
                 return LRESULT(0);
             }
+            WM_RBUTTONUP => {
+                // Read what the menu needs, then let go of the state: the menu runs its own message
+                // loop, which keeps delivering timer ticks to this window.
+                let autostart = match state_of(hwnd) {
+                    Some(state) if state.drag.is_none() => state.handler.autostart_enabled(),
+                    _ => return LRESULT(0),
+                };
+                if let Some(command) = menu::show(hwnd, autostart)
+                    && let Some(problem) = execute(hwnd, command)
+                {
+                    report_error(&problem);
+                }
+                return LRESULT(0);
+            }
             // Capture taken away (e.g. another window grabbed it): the drag is over.
             WM_CAPTURECHANGED => {
                 if let Some(state) = state_of(hwnd) {
@@ -457,7 +514,7 @@ mod tests {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::GetCapture;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GetWindowRect, IsWindowVisible, SendMessageW, WS_CAPTION,
+        GWL_EXSTYLE, GWL_STYLE, GetWindowRect, IsWindow, IsWindowVisible, SendMessageW, WS_CAPTION,
         WS_THICKFRAME,
     };
 
@@ -892,6 +949,89 @@ mod tests {
         let bar = Bar::new();
         bar.send(WM_DISPLAYCHANGE, 0, 0);
         assert_eq!(bar.rect(), Rect::new(200, 200, 300, 40));
+    }
+
+    // ---- menu commands ----
+
+    /// A handler with commands: reports an error for "open config" and records them all.
+    struct Commands {
+        seen: Rc<RefCell<Vec<Command>>>,
+        autostart: bool,
+    }
+
+    impl Handler for Commands {
+        fn draw(&mut self, _: &mut Canvas) -> bool {
+            true
+        }
+
+        fn autostart_enabled(&self) -> bool {
+            self.autostart
+        }
+
+        fn run_command(&mut self, command: Command) -> Option<String> {
+            self.seen.borrow_mut().push(command);
+            (command == Command::OpenConfig).then(|| "could not open".to_string())
+        }
+    }
+
+    fn commands_window(autostart: bool) -> (HWND, Rc<RefCell<Vec<Command>>>) {
+        enable_dpi_awareness();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let hwnd = create(
+            Placement {
+                x: Some(10),
+                y: Some(10),
+                width: 100,
+                height: 20,
+            },
+            Box::new(Commands {
+                seen: seen.clone(),
+                autostart,
+            }),
+        )
+        .unwrap();
+        (hwnd, seen)
+    }
+
+    #[test]
+    fn menu_commands_reach_the_handler_and_its_errors_come_back() {
+        let (hwnd, seen) = commands_window(false);
+        assert_eq!(
+            execute(hwnd, Command::OpenConfig),
+            Some("could not open".to_string())
+        );
+        assert_eq!(execute(hwnd, Command::ToggleAutostart), None);
+        assert_eq!(
+            *seen.borrow(),
+            vec![Command::OpenConfig, Command::ToggleAutostart]
+        );
+        // SAFETY: query on our own window.
+        assert!(
+            unsafe { IsWindow(Some(hwnd)).as_bool() },
+            "only Quit closes the window"
+        );
+        destroy(hwnd);
+    }
+
+    #[test]
+    fn quit_closes_the_window_without_asking_the_handler() {
+        let (hwnd, seen) = commands_window(false);
+        assert_eq!(execute(hwnd, Command::Quit), None);
+        // SAFETY: query on a window that should be gone.
+        assert!(!unsafe { IsWindow(Some(hwnd)).as_bool() });
+        assert!(seen.borrow().is_empty());
+    }
+
+    #[test]
+    fn handlers_without_commands_ignore_them() {
+        let draws = Rc::new(Cell::new(0));
+        let hwnd = make(&draws);
+        assert_eq!(execute(hwnd, Command::OpenConfig), None);
+        assert_eq!(execute(hwnd, Command::ToggleAutostart), None);
+        destroy(hwnd);
+        // The default handler also says autostart is off.
+        let handler = Counting { draws };
+        assert!(!handler.autostart_enabled());
     }
 
     #[test]
