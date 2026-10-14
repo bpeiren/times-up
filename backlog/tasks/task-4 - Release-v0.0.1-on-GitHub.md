@@ -5,16 +5,11 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:15'
-updated_date: '2026-10-14 18:17'
+updated_date: '2026-10-14 18:18'
 labels: []
 dependencies: []
 modified_files:
-  - Cargo.toml
-  - Cargo.lock
-  - LICENSE
-  - README.md
-  - assets/README.txt
-  - scripts/package.ps1
+  - RELEASE_NOTES.md
 ordinal: 21000
 ---
 
