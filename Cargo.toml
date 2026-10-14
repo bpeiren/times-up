@@ -1,6 +1,8 @@
 [package]
 name = "times-up"
 version = "0.0.1"
+license = "MIT"
+description = "A small always-on-top class-hour timer for Windows"
 edition = "2024"
 
 [dependencies]

@@ -125,6 +125,10 @@ logic.
 | `icon`, `win::tray` | The notification-area icon, drawn at run time, and its click handling |
 | `win::text`, `win::monitors`, `win::surface` | GDI text, monitor areas, showing the canvas |
 
+### License
+
+[MIT](LICENSE), copyright (c) 2026 Bart Peiren. The zip contains the license text.
+
 ### Project management
 
 Work is tracked with Backlog.md (`backlog/`) and the architecture, curated as C4 documents, lives

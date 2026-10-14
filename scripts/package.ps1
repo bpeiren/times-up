@@ -6,10 +6,10 @@
     1. cargo build --release --locked
     2. checks that the exe only imports Windows DLLs (tests/exe_dependencies.rs, run against the
        release exe)
-    3. dist\times-up-<version>-win-x64\ with times-up.exe, the commented sample times-up.toml and
-       README.txt, zipped next to it
+    3. dist\times-up-<version>-win-x64\ with times-up.exe, the commented sample times-up.toml,
+       README.txt and LICENSE, zipped next to it
     4. smoke test: unzips into a fresh temporary folder, starts the exe from there, checks that
-       the window exists and the process keeps running, that nothing but the three files is in
+       the window exists and the process keeps running, that nothing but the packaged files is in
        the folder afterwards, then stops it
     Optionally measures idle memory and CPU of the packaged exe.
 
@@ -73,6 +73,7 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Copy-Item $exe (Join-Path $folder 'times-up.exe')
 Copy-Item (Join-Path $root 'assets\times-up.sample.toml') (Join-Path $folder 'times-up.toml')
 Copy-Item (Join-Path $root 'assets\README.txt') (Join-Path $folder 'README.txt')
+Copy-Item (Join-Path $root 'LICENSE') (Join-Path $folder 'LICENSE')
 Compress-Archive -Path $folder -DestinationPath $zip -CompressionLevel Optimal
 
 $exeSize = (Get-Item (Join-Path $folder 'times-up.exe')).Length

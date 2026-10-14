@@ -37,5 +37,7 @@ Everything is in times-up.toml next to the exe; nothing is stored anywhere else 
 optional "Start with Windows" entry). Lines starting with # are comments. Wrong values are ignored
 and replaced by their defaults. Colours look like "#2ecc71" (or "#2ecc7180" with transparency).
 
+Times Up is free software under the MIT license (see LICENSE).
+
 Needs Windows 11, or Windows 10 version 1607 or later, 64-bit (only tried on Windows 11). If the
 folder is read-only the bar still works but cannot remember its place.

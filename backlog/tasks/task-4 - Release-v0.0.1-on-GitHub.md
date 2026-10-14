@@ -5,12 +5,16 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:15'
-updated_date: '2026-10-14 18:15'
+updated_date: '2026-10-14 18:17'
 labels: []
 dependencies: []
 modified_files:
   - Cargo.toml
   - Cargo.lock
+  - LICENSE
+  - README.md
+  - assets/README.txt
+  - scripts/package.ps1
 ordinal: 21000
 ---
 
@@ -26,6 +30,8 @@ First public release of Times Up as a GitHub release with the portable zip, so t
 - [ ] #2 main and the tag v0.0.1 are pushed to GitHub
 - [ ] #3 A pre-release v0.0.1 exists with the zip attached and release notes (what it does, Windows 11 only, unsigned exe, SHA256)
 - [ ] #4 The downloaded release asset has the same SHA256 as the local zip
+- [ ] #5 MIT license added (LICENSE, license in Cargo.toml, README section, LICENSE inside the zip)
+- [ ] #6 MIT license added (LICENSE, license in Cargo.toml, README section, LICENSE inside the zip)
 <!-- AC:END -->
 
 ## Definition of Done
