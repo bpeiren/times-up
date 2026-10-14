@@ -1,0 +1,165 @@
+<#
+.SYNOPSIS
+    Builds the release exe and packages it as a portable zip.
+
+.DESCRIPTION
+    1. cargo build --release --locked
+    2. checks that the exe only imports Windows DLLs (tests/exe_dependencies.rs, run against the
+       release exe)
+    3. dist\times-up-<version>-win-x64\ with times-up.exe, the commented sample times-up.toml and
+       README.txt, zipped next to it
+    4. smoke test: unzips into a fresh temporary folder, starts the exe from there, checks that
+       the window exists and the process keeps running, that nothing but the three files is in
+       the folder afterwards, then stops it
+    Optionally measures idle memory and CPU of the packaged exe.
+
+.PARAMETER SkipSmoke
+    Do not start the packaged exe.
+
+.PARAMETER MeasureSeconds
+    When greater than 0, run the packaged exe for that many seconds with a class in progress and
+    report size, working set, private memory and CPU use.
+
+.EXAMPLE
+    .\scripts\package.ps1
+    .\scripts\package.ps1 -MeasureSeconds 30
+#>
+[CmdletBinding()]
+param(
+    [switch]$SkipSmoke,
+    [int]$MeasureSeconds = 0
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+Set-Location $root
+
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+}
+
+function Invoke-Checked([string]$what, [scriptblock]$command) {
+    & $command
+    if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
+}
+
+$version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+$name = "times-up-$version-win-x64"
+$exe = Join-Path $root 'target\release\times-up.exe'
+$dist = Join-Path $root 'dist'
+$folder = Join-Path $dist $name
+$zip = Join-Path $dist "$name.zip"
+
+Write-Host "== Building release $version"
+Invoke-Checked 'cargo build' { cargo build --release --locked }
+
+Write-Host "== Checking the exe only depends on Windows"
+$env:TIMES_UP_EXE = $exe
+try {
+    Invoke-Checked 'dependency check' { cargo test --locked --test exe_dependencies --quiet }
+} finally {
+    Remove-Item Env:\TIMES_UP_EXE -ErrorAction SilentlyContinue
+}
+
+Write-Host "== Packaging $name"
+if (Test-Path $folder) { Remove-Item $folder -Recurse -Force }
+if (Test-Path $zip) { Remove-Item $zip -Force }
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
+Copy-Item $exe (Join-Path $folder 'times-up.exe')
+Copy-Item (Join-Path $root 'assets\times-up.sample.toml') (Join-Path $folder 'times-up.toml')
+Copy-Item (Join-Path $root 'assets\README.txt') (Join-Path $folder 'README.txt')
+Compress-Archive -Path $folder -DestinationPath $zip -CompressionLevel Optimal
+
+$exeSize = (Get-Item (Join-Path $folder 'times-up.exe')).Length
+$zipSize = (Get-Item $zip).Length
+$hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+Write-Host ("   exe {0:N0} bytes, zip {1:N0} bytes" -f $exeSize, $zipSize)
+Write-Host "   SHA256 $hash"
+
+Add-Type -ErrorAction SilentlyContinue @"
+using System; using System.Runtime.InteropServices;
+public class TimesUpWin {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);
+}
+"@
+
+function Wait-ForBarWindow([int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {
+        if ([TimesUpWin]::FindWindow('TimesUpBar', [NullString]::Value) -ne [IntPtr]::Zero) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+function New-ScratchFolder([string]$label) {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) "times-up-$label-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    return $dir
+}
+
+if (-not $SkipSmoke) {
+    Write-Host "== Smoke test from a fresh folder"
+    if ([TimesUpWin]::FindWindow('TimesUpBar', [NullString]::Value) -ne [IntPtr]::Zero) {
+        throw 'Another Times Up is already running; close it first so the smoke test is meaningful.'
+    }
+    $scratch = New-ScratchFolder 'smoke'
+    $process = $null
+    try {
+        Expand-Archive -Path $zip -DestinationPath $scratch
+        $unpacked = Join-Path $scratch $name
+        $before = (Get-ChildItem $unpacked | ForEach-Object Name | Sort-Object) -join ', '
+        $sampleBefore = (Get-FileHash (Join-Path $unpacked 'times-up.toml')).Hash
+        $process = Start-Process (Join-Path $unpacked 'times-up.exe') -PassThru
+        if (-not (Wait-ForBarWindow 10)) { throw 'The window did not appear within 10 seconds.' }
+        Start-Sleep -Seconds 3
+        if ($process.HasExited) { throw "The exe exited early with code $($process.ExitCode)." }
+        $after = (Get-ChildItem $unpacked | ForEach-Object Name | Sort-Object) -join ', '
+        if ($before -ne $after) { throw "The exe changed the folder: [$before] -> [$after]" }
+        if ($sampleBefore -ne (Get-FileHash (Join-Path $unpacked 'times-up.toml')).Hash) {
+            throw 'The exe rewrote the sample config although nothing was changed.'
+        }
+        Write-Host "   OK: started from $unpacked, window present, still running, folder unchanged ($after)"
+    } finally {
+        if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+        Start-Sleep -Milliseconds 300
+        Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($MeasureSeconds -gt 0) {
+    Write-Host "== Measuring the packaged exe for $MeasureSeconds s with a class in progress"
+    if ([TimesUpWin]::FindWindow('TimesUpBar', [NullString]::Value) -ne [IntPtr]::Zero) {
+        throw 'Another Times Up is already running; close it first.'
+    }
+    $scratch = New-ScratchFolder 'measure'
+    $process = $null
+    try {
+        Copy-Item (Join-Path $folder 'times-up.exe') $scratch
+        $day = (Get-Date).DayOfWeek.ToString().ToLower()
+        $start = (Get-Date).AddMinutes(-10)
+        $class = '{ start = "' + $start.ToString('HH:mm') + '", end = "' + $start.AddMinutes(100).ToString('HH:mm') + '" }'
+        "[$day]`nclasses = [$class]`n" | Set-Content (Join-Path $scratch 'times-up.toml') -Encoding utf8
+        $process = Start-Process (Join-Path $scratch 'times-up.exe') -PassThru
+        if (-not (Wait-ForBarWindow 10)) { throw 'The window did not appear within 10 seconds.' }
+        Start-Sleep -Seconds 3
+        $process.Refresh()
+        $cpu0 = $process.TotalProcessorTime.TotalMilliseconds
+        $t0 = Get-Date
+        Start-Sleep -Seconds $MeasureSeconds
+        $process.Refresh()
+        $cpu1 = $process.TotalProcessorTime.TotalMilliseconds
+        $elapsed = ((Get-Date) - $t0).TotalMilliseconds
+        Write-Host ("   exe size       {0:N0} bytes" -f $exeSize)
+        Write-Host ("   working set    {0:N1} MB (includes shared Windows DLL pages)" -f ($process.WorkingSet64 / 1MB))
+        Write-Host ("   private memory {0:N1} MB" -f ($process.PrivateMemorySize64 / 1MB))
+        Write-Host ("   CPU            {0:N2} % of one core over {1:N0} s" -f ((($cpu1 - $cpu0) / $elapsed) * 100), ($elapsed / 1000))
+        Write-Host ("   threads {0}, handles {1}" -f $process.Threads.Count, $process.HandleCount)
+    } finally {
+        if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+        Start-Sleep -Milliseconds 300
+        Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host "== Done: $zip"

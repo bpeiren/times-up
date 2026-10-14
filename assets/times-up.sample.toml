@@ -1,0 +1,61 @@
+# Times Up settings. Edit this file with any text editor; changes are picked up automatically.
+# Lines starting with # are comments.
+
+[general]
+lead_in_minutes = 5          # the bar appears this long before a class starts
+linger_seconds = 10          # ...and stays this long after the last class ends
+default_break_minutes = 10   # break in the middle of classes of 100 minutes or more
+orange_minutes = 10          # the bar turns orange this long before the end of a block
+red_minutes = 5              # ...and red this long before the end
+
+[colors]                     # #RRGGBB or #RRGGBBAA
+green = "#2ecc71"
+orange = "#f39c12"
+red = "#e74c3c"
+break = "#bdc3c7"            # the break between two blocks
+track = "#33333399"          # the part of the bar that is not filled yet
+text = "#ffffff"
+
+[window]                     # written by the app when you move or resize the bar
+# x = 100
+# y = 100
+# width = 600
+# height = 60
+
+# One section per weekday (monday ... friday). Times are 24-hour HH:MM.
+# A class of 100 minutes or more gets a break in the middle. Optional per class, in minutes:
+#   break_start = 45, break_len = 10 (0 = no break), orange = [10, 10], red = [5, 5]  (one value per block)
+[monday]
+classes = [
+  { start = "08:30", end = "09:20" },
+  { start = "09:20", end = "10:10" },
+  { start = "10:25", end = "12:05" },
+]
+
+[tuesday]
+classes = [
+  { start = "08:30", end = "09:20" },
+  { start = "09:20", end = "10:10" },
+  { start = "10:25", end = "12:05" },
+]
+
+[wednesday]
+classes = [
+  { start = "08:30", end = "09:20" },
+  { start = "09:20", end = "10:10" },
+  { start = "10:25", end = "12:05" },
+]
+
+[thursday]
+classes = [
+  { start = "08:30", end = "09:20" },
+  { start = "09:20", end = "10:10" },
+  { start = "10:25", end = "12:05" },
+]
+
+[friday]
+classes = [
+  { start = "08:30", end = "09:20" },
+  { start = "09:20", end = "10:10" },
+  { start = "10:25", end = "12:05" },
+]
