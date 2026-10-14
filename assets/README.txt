@@ -7,10 +7,10 @@ A 100 minute class shows two blocks with a break in the middle.
 
 Getting started
 ---------------
-1. Put times-up.exe and times-up.toml in any folder (a USB stick works too) and start
-   times-up.exe. There is nothing to install.
+1. Put times-up.exe in any folder (a USB stick works too) and start it. There is nothing to
+   install. The first time, it writes times-up.toml next to it: a commented sample timetable.
 2. You will not see the bar yet: it only shows during class times (and 5 minutes before), and the
-   sample times-up.toml has morning classes only. A small icon appears in the notification area
+   sample timetable has morning classes only. A small icon appears in the notification area
    (maybe behind the ^ arrow) to show that the app is running. Click it and choose
    "Open config (Notepad)", then set the classes for each weekday. Save the file: the bar picks up
    the change by itself.
@@ -30,6 +30,10 @@ The bar
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit
+
+Upgrading
+---------
+Replace times-up.exe with the new one. Your times-up.toml stays as it is and keeps working.
 
 Settings
 --------
