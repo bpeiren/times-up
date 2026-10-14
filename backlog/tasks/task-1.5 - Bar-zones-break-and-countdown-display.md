@@ -28,7 +28,7 @@ modified_files:
   - groma/systems/time-s-up/containers/times-up/components/window-host.md
   - groma/flows/draw-the-bar-each-second.md
 parent_task_id: TASK-1
-ordinal: 6000
+ordinal: 20000
 ---
 
 ## Description

@@ -52,7 +52,7 @@ modified_files:
   - groma/externals/windows.md
   - groma/flows/start-the-bar.md
 parent_task_id: TASK-1
-ordinal: 5000
+ordinal: 19000
 ---
 
 ## Description

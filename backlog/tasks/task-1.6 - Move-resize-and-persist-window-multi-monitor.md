@@ -32,7 +32,7 @@ modified_files:
   - groma/actors/teacher.md
   - groma/flows/move-or-resize-the-bar.md
 parent_task_id: TASK-1
-ordinal: 7000
+ordinal: 12000
 ---
 
 ## Description

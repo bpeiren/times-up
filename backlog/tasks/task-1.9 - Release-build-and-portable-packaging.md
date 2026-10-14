@@ -25,7 +25,7 @@ modified_files:
   - src/config.rs
   - groma/systems/time-s-up/containers/times-up/container.md
 parent_task_id: TASK-1
-ordinal: 10000
+ordinal: 15000
 ---
 
 ## Description

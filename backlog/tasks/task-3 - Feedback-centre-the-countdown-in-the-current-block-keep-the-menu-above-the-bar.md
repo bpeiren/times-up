@@ -29,7 +29,7 @@ modified_files:
   - groma/systems/time-s-up/containers/times-up/components/bar.md
   - groma/systems/time-s-up/containers/times-up/components/editing.md
   - groma/systems/time-s-up/containers/times-up/components/window-host.md
-ordinal: 12000
+ordinal: 5500
 ---
 
 ## Description
