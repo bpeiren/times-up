@@ -3,11 +3,13 @@
 
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
+use super::monitors;
 use super::text::render_mask;
 use super::window::{self, DEFAULT_HEIGHT, DEFAULT_WIDTH, Handler, Placement};
 use crate::bar;
 use crate::canvas::Canvas;
-use crate::config::{self, Config, ConfigFile};
+use crate::config::{self, Config, ConfigFile, WindowRect};
+use crate::interaction::{Rect, default_rect, fit_on_screen};
 use crate::schedule::{Secs, Weekday};
 
 /// Aim this many milliseconds past a second boundary so the clock has surely ticked over.
@@ -62,6 +64,45 @@ impl Handler for App {
     fn next_tick_ms(&self) -> u32 {
         next_tick_delay(self.last_ms)
     }
+
+    /// Remember where the teacher put the bar. A config that cannot be written (read-only
+    /// folder) just means the position is not kept for the next start.
+    fn window_changed(&mut self, rect: Rect) {
+        self.config.window = WindowRect {
+            x: Some(rect.x),
+            y: Some(rect.y),
+            width: u32::try_from(rect.w).ok(),
+            height: u32::try_from(rect.h).ok(),
+        };
+        if let Some(file) = &mut self.file {
+            let _ = file.save_window(&self.config.window);
+        }
+    }
+}
+
+/// Where the window starts: the saved rectangle moved onto a connected monitor if need be, or the
+/// default spot (top centre of the primary monitor) when nothing is saved. Sizes that were
+/// never saved use the defaults for the display's `scale`, and nothing goes below `min`.
+fn startup_rect(
+    saved: &WindowRect,
+    scale: f32,
+    areas: &[Rect],
+    min: (i32, i32),
+    margin: i32,
+) -> Rect {
+    let width = saved
+        .width
+        .map_or((DEFAULT_WIDTH as f32 * scale) as i32, |w| w as i32)
+        .max(min.0);
+    let height = saved
+        .height
+        .map_or((DEFAULT_HEIGHT as f32 * scale) as i32, |h| h as i32)
+        .max(min.1);
+    match (saved.x, saved.y, areas.first()) {
+        (Some(x), Some(y), _) => fit_on_screen(Rect::new(x, y, width, height), areas, margin),
+        (_, _, Some(primary)) => default_rect(width, height, *primary, margin),
+        _ => Rect::new(0, margin, width, height),
+    }
 }
 
 struct Now {
@@ -108,17 +149,18 @@ pub fn run() -> i32 {
     let mut file = ConfigFile::new(config::default_path());
     let config = file.load_or_create().config;
 
+    let rect = startup_rect(
+        &config.window,
+        scale,
+        &monitors::work_areas(),
+        window::min_size(),
+        window::top_margin(),
+    );
     let placement = Placement {
-        x: config.window.x,
-        y: config.window.y,
-        width: config
-            .window
-            .width
-            .unwrap_or((DEFAULT_WIDTH as f32 * scale) as u32),
-        height: config
-            .window
-            .height
-            .unwrap_or((DEFAULT_HEIGHT as f32 * scale) as u32),
+        x: Some(rect.x),
+        y: Some(rect.y),
+        width: rect.w as u32,
+        height: rect.h as u32,
     };
     match window::create(placement, Box::new(App::new(config, Some(file)))) {
         Ok(_) => window::run_message_loop(),
@@ -266,6 +308,163 @@ mod tests {
         assert_eq!(app.config.colors.green, Rgba::rgb(1, 2, 3));
         assert!(app.config.schedule.classes(MON).is_empty());
         assert_eq!(app.config.schedule.classes(Weekday::Tue).len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- window placement ----
+
+    const PRIMARY: Rect = Rect::new(0, 0, 1920, 1040);
+    const SECOND: Rect = Rect::new(1920, 0, 1280, 1024);
+    const MIN: (i32, i32) = (160, 24);
+
+    fn saved(x: Option<i32>, y: Option<i32>, w: Option<u32>, h: Option<u32>) -> WindowRect {
+        WindowRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn nothing_saved_starts_top_centre_of_the_primary_monitor_at_the_default_size() {
+        let rect = startup_rect(&WindowRect::default(), 1.0, &[PRIMARY, SECOND], MIN, 20);
+        assert_eq!(rect, Rect::new(660, 20, 600, 60));
+        // The default size follows the display scale.
+        let rect = startup_rect(&WindowRect::default(), 1.5, &[PRIMARY], MIN, 30);
+        assert_eq!((rect.w, rect.h), (900, 90));
+        assert_eq!(rect.x, (1920 - 900) / 2);
+        assert_eq!(rect.y, 30);
+    }
+
+    #[test]
+    fn a_saved_rectangle_is_restored_as_it_was() {
+        let s = saved(Some(2000), Some(300), Some(700), Some(80));
+        assert_eq!(
+            startup_rect(&s, 1.0, &[PRIMARY, SECOND], MIN, 20),
+            Rect::new(2000, 300, 700, 80)
+        );
+    }
+
+    #[test]
+    fn a_saved_size_without_a_position_keeps_the_size_and_uses_the_default_spot() {
+        let s = saved(None, None, Some(800), Some(50));
+        assert_eq!(
+            startup_rect(&s, 1.0, &[PRIMARY], MIN, 20),
+            Rect::new(560, 20, 800, 50)
+        );
+        // A position needs both coordinates.
+        let s = saved(Some(100), None, Some(800), Some(50));
+        assert_eq!(startup_rect(&s, 1.0, &[PRIMARY], MIN, 20).y, 20);
+    }
+
+    #[test]
+    fn a_missing_monitor_brings_the_window_back_to_the_primary_one() {
+        // Saved on the second monitor, which is not connected now.
+        let s = saved(Some(2400), Some(300), Some(600), Some(60));
+        assert_eq!(
+            startup_rect(&s, 1.0, &[PRIMARY], MIN, 20),
+            Rect::new(660, 20, 600, 60)
+        );
+        // Barely visible at the edge: pulled fully onto the screen.
+        let s = saved(Some(1850), Some(300), Some(600), Some(60));
+        assert_eq!(
+            startup_rect(&s, 1.0, &[PRIMARY], MIN, 20),
+            Rect::new(1320, 300, 600, 60)
+        );
+    }
+
+    #[test]
+    fn a_saved_size_below_the_minimum_is_raised() {
+        let s = saved(Some(100), Some(100), Some(10), Some(5));
+        let rect = startup_rect(&s, 1.0, &[PRIMARY], MIN, 20);
+        assert_eq!((rect.w, rect.h), (160, 24));
+    }
+
+    #[test]
+    fn without_monitor_information_the_saved_position_is_used() {
+        let s = saved(Some(50), Some(60), Some(300), Some(40));
+        assert_eq!(
+            startup_rect(&s, 1.0, &[], MIN, 20),
+            Rect::new(50, 60, 300, 40)
+        );
+        assert_eq!(
+            startup_rect(&WindowRect::default(), 1.0, &[], MIN, 20),
+            Rect::new(0, 20, 600, 60)
+        );
+    }
+
+    // ---- saving the window rectangle ----
+
+    #[test]
+    fn moving_or_resizing_the_window_is_saved_in_the_config_file() {
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("times-up-app-save-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(config::FILE_NAME);
+        let mut file = ConfigFile::new(&path);
+        let config = file.load_or_create().config;
+        let mut app = App::new(config, Some(file));
+
+        app.window_changed(Rect::new(500, 40, 640, 72));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# Times Up settings."), "comments are kept");
+        let reloaded = config::parse(&text).config;
+        assert_eq!(
+            reloaded.window,
+            saved(Some(500), Some(40), Some(640), Some(72))
+        );
+        assert_eq!(app.config.window, reloaded.window);
+
+        // Our own save is not mistaken for an outside edit, so it does not reload mid-drag.
+        let mut canvas = Canvas::new(100, 20);
+        let _ = Handler::draw(&mut app, &mut canvas);
+        assert_eq!(app.config.window, reloaded.window);
+
+        // The next start comes back at the same place.
+        assert_eq!(
+            startup_rect(&reloaded.window, 1.0, &[PRIMARY, SECOND], MIN, 20),
+            Rect::new(500, 40, 640, 72)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unwritable_config_does_not_stop_the_window_from_moving() {
+        // No file at all: the change is kept in memory only.
+        let mut app = app_with(vec![]);
+        app.window_changed(Rect::new(10, 20, 300, 40));
+        assert_eq!(
+            app.config.window,
+            saved(Some(10), Some(20), Some(300), Some(40))
+        );
+
+        // A file that cannot be written (read-only): saving fails quietly.
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("times-up-app-readonly-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(config::FILE_NAME);
+        fs::write(&path, config::DEFAULT_CONFIG).unwrap();
+        let mut perm = fs::metadata(&path).unwrap().permissions();
+        perm.set_readonly(true);
+        fs::set_permissions(&path, perm).unwrap();
+        let mut file = ConfigFile::new(&path);
+        let config = file.load_or_create().config;
+        let mut app = App::new(config, Some(file));
+        app.window_changed(Rect::new(1, 2, 300, 40));
+        assert_eq!(fs::read_to_string(&path).unwrap(), config::DEFAULT_CONFIG);
+        assert_eq!(
+            app.config.window.x,
+            Some(1),
+            "still remembered while running"
+        );
+
+        let mut perm = fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        let _ = fs::set_permissions(&path, perm);
         let _ = fs::remove_dir_all(&dir);
     }
 
