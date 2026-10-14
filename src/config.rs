@@ -1114,7 +1114,10 @@ classes = [{ start = "09:00", end = "09:50" }]
         );
 
         let text = fs::read_to_string(dir.file()).unwrap();
-        assert!(text.contains("# Times Up settings."), "header comment lost");
+        assert!(
+            text.contains("# Time's up settings."),
+            "header comment lost"
+        );
         assert!(
             text.contains("# the bar appears this long before a class starts"),
             "inline comment lost"
@@ -1180,7 +1183,7 @@ classes = [{ start = "09:00", end = "09:50" }]
         assert!(file.poll().is_none());
 
         let text = fs::read_to_string(dir.file()).unwrap();
-        assert!(text.contains("# Times Up settings."));
+        assert!(text.contains("# Time's up settings."));
         assert!(text.contains("# One section per weekday"));
         c = parse(&text).config;
         assert_eq!(c.schedule.classes(Weekday::Mon)[2], class);

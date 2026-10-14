@@ -1,10 +1,10 @@
 ---
 id: TASK-1
-title: 'Times Up: class-hour timer for Windows'
+title: 'Time''s up: class-hour timer for Windows'
 status: Done
 assignee: []
 created_date: '2026-10-14 15:50'
-updated_date: '2026-10-14 18:03'
+updated_date: '2026-10-14 18:26'
 labels: []
 dependencies: []
 ordinal: 1000
@@ -33,5 +33,5 @@ Criterion 2 narrowed by the user from "Windows 10/11" to "Windows 11": Windows 1
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Times Up is a portable Rust/Win32 class-hour timer: a 549 KB static exe plus a commented times-up.toml (zip 291 KB, scripts/package.ps1). The bar fills green/orange/red per class block with a break gap and countdown centred in its block, is movable and resizable with a remembered place, has editable breaks and warning zones (saved as slot defaults), a tray icon and right-click menu (open config, start with Windows, quit), and uses about 12 MB (2 MB private) and 0.5 % CPU. 248 unit and window tests plus a PE-import dependency test pass; verified on Windows 11 only.
+Time's up is a portable Rust/Win32 class-hour timer: a 549 KB static exe plus a commented times-up.toml (zip 291 KB, scripts/package.ps1). The bar fills green/orange/red per class block with a break gap and countdown centred in its block, is movable and resizable with a remembered place, has editable breaks and warning zones (saved as slot defaults), a tray icon and right-click menu (open config, start with Windows, quit), and uses about 12 MB (2 MB private) and 0.5 % CPU. 248 unit and window tests plus a PE-import dependency test pass; verified on Windows 11 only.
 <!-- SECTION:FINAL_SUMMARY:END -->

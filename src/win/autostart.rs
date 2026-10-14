@@ -199,14 +199,14 @@ mod tests {
         }
     }
 
-    const EXE: &str = r"C:\Tools\Times Up\times-up.exe";
+    const EXE: &str = r"C:\Tools\Time's up\times-up.exe";
 
     #[test]
     fn command_is_the_quoted_exe_path() {
         let s = Scratch::new("command");
         assert_eq!(
             s.autostart(EXE).command(),
-            r#""C:\Tools\Times Up\times-up.exe""#
+            r#""C:\Tools\Time's up\times-up.exe""#
         );
         assert_eq!(s.autostart(EXE).exe(), Path::new(EXE));
     }

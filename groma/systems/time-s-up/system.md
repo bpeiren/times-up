@@ -1,6 +1,6 @@
 ---
 type: C4 System
-title: Times Up
+title: Time's up
 status: stable
 groma:
   id: time-s-up

@@ -107,7 +107,7 @@ function New-ScratchFolder([string]$label) {
 if (-not $SkipSmoke) {
     Write-Host "== Smoke test from a fresh folder"
     if ([TimesUpWin]::FindWindow('TimesUpBar', [NullString]::Value) -ne [IntPtr]::Zero) {
-        throw 'Another Times Up is already running; close it first so the smoke test is meaningful.'
+        throw "Another Time's up is already running; close it first so the smoke test is meaningful."
     }
     $scratch = New-ScratchFolder 'smoke'
     $process = $null
@@ -136,7 +136,7 @@ if (-not $SkipSmoke) {
 if ($MeasureSeconds -gt 0) {
     Write-Host "== Measuring the packaged exe for $MeasureSeconds s with a class in progress"
     if ([TimesUpWin]::FindWindow('TimesUpBar', [NullString]::Value) -ne [IntPtr]::Zero) {
-        throw 'Another Times Up is already running; close it first.'
+        throw "Another Time's up is already running; close it first."
     }
     $scratch = New-ScratchFolder 'measure'
     $process = $null

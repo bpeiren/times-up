@@ -687,7 +687,7 @@ mod tests {
 
         app.window_changed(Rect::new(500, 40, 640, 72));
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("# Times Up settings."), "comments are kept");
+        assert!(text.contains("# Time's up settings."), "comments are kept");
         let reloaded = config::parse(&text).config;
         assert_eq!(
             reloaded.window,

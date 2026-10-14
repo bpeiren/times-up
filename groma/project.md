@@ -1,6 +1,6 @@
 ---
 type: Groma Project
-title: Times Up
+title: Time's up
 groma:
   profile: architecture
 description: A small always-on-top class-hour timer for Windows

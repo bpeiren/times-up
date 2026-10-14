@@ -1,6 +1,6 @@
 ---
 type: C4 Container
-title: Times Up app
+title: Time's up app
 status: stable
 groma:
   id: times-up

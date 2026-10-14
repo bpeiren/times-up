@@ -28,7 +28,7 @@ use crate::icon::tray_icon;
 /// The message the shell sends to the window when the pointer does something on the icon.
 pub const CALLBACK_MESSAGE: u32 = WM_APP + 1;
 const ICON_ID: u32 = 1;
-const TOOLTIP: &str = "Times Up";
+const TOOLTIP: &str = "Time's up";
 
 /// Whether a tray callback (`lParam` of [`CALLBACK_MESSAGE`]) is a click that should open the menu.
 pub fn opens_menu(lparam: isize) -> bool {

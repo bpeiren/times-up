@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:15'
-updated_date: '2026-10-14 18:20'
+updated_date: '2026-10-14 18:26'
 labels: []
 dependencies: []
 modified_files:
@@ -16,7 +16,7 @@ ordinal: 21000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-First public release of Times Up as a GitHub release with the portable zip, so teachers can download it. Only verified on Windows 11 (TASK-1 narrowed to that), so it is marked as a pre-release.
+First public release of Time's up as a GitHub release with the portable zip, so teachers can download it. Only verified on Windows 11 (TASK-1 narrowed to that), so it is marked as a pre-release.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -54,5 +54,5 @@ Done in this order: repo made public on request (secret scan of tracked files fo
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Times Up 0.0.1 is released as a GitHub pre-release (https://github.com/bpeiren/times-up/releases/tag/v0.0.1) with times-up-0.0.1-win-x64.zip, release notes and an MIT license; the repo is public; the downloaded asset matches the local zip by SHA256.
+Time's up 0.0.1 is released as a GitHub pre-release (https://github.com/bpeiren/times-up/releases/tag/v0.0.1) with times-up-0.0.1-win-x64.zip, release notes and an MIT license; the repo is public; the downloaded asset matches the local zip by SHA256.
 <!-- SECTION:FINAL_SUMMARY:END -->

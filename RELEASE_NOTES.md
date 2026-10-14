@@ -1,4 +1,4 @@
-## Times Up 0.0.1 (first pre-release)
+## Time's up 0.0.1 (first pre-release)
 
 A small always-on-top class-hour timer for Windows. A bar on screen fills green, then orange, then
 red as the class hour runs out. A 100 minute class shows two blocks with a break in the middle.
@@ -38,7 +38,7 @@ the `^` arrow), choose *Open config (Notepad)*, and enter your own timetable.
 SHA256 of `times-up-0.0.1-win-x64.zip`:
 
 ```
-22c8bcfdc61a8c62368ba72670213ce25a2090eae038b951bcf7e70829c92416
+58c59d037593d4b55a11a07d14c71f45b0923ce742006f5504bd61c0dec33e92
 ```
 
 Licensed under the [MIT license](LICENSE).

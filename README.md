@@ -1,4 +1,4 @@
-# Times Up
+# Time's up
 
 A small always-on-top class-hour timer for Windows. A bar on screen fills green, then orange, then
 red as the class hour runs out, so a teacher can keep track of time at a glance. A 100 minute class

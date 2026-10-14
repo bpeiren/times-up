@@ -399,7 +399,7 @@ fn create_inner(
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             w!("TimesUpBar"),
-            w!("Times Up"),
+            w!("Time's up"),
             WS_POPUP,
             placement.x.unwrap_or(home.x),
             placement.y.unwrap_or(home.y),
@@ -445,7 +445,7 @@ fn report_error(text: &str) {
         MessageBoxW(
             None,
             PCWSTR(text.as_ptr()),
-            w!("Times Up"),
+            w!("Time's up"),
             MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
         );
     }
