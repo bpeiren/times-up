@@ -29,6 +29,16 @@ Do not edit Backlog task, draft, document, decision, or milestone markdown files
 This project uses Groma. Before you scan, inspect, or curate architecture, or change files for a Backlog task, run `groma agent-instructions` and read the guide it names for that job. When it reports a first scan, ask the user whether they want you to curate the architecture. Do not edit Groma-owned architecture files directly.
 <!-- groma:end -->
 
+## Backlog tasks
+
+- **Plan on `main`:** create tasks and change their priority, Definition of Done or decisions directly
+  on `main`, in their own `chore(backlog)` commits. Planning is then visible straight away, task IDs
+  cannot collide between branches, and pull requests stay about their subject.
+- **Execute in the pull request:** the progress of the task a pull request implements (status, plan,
+  notes, checked criteria, modified files, final summary) goes in that pull request, so it merges
+  together with the change. A task that is created and finished within one pull request may be created
+  there.
+
 ## Commit messages
 
 Write commit messages as [Conventional Commits](https://www.conventionalcommits.org/) so a changelog
