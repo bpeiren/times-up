@@ -2,7 +2,7 @@ project_name: "Time's up"
 default_status: "To Do"
 statuses: ["To Do", "In Progress", "Done"]
 labels: []
-definition_of_done: ["All code is covered by sensible tests", "Tests pass"]
+definition_of_done: ["All AC are met.", "All code is covered by sensible tests. All tests pass."]
 date_format: yyyy-mm-dd
 max_column_width: 20
 auto_open_browser: true
