@@ -1,9 +1,11 @@
 # git-cliff configuration: https://git-cliff.org/docs/configuration
 #
-# Generates CHANGELOG.md from the conventional commit messages (see AGENTS.md):
-#   git cliff -o CHANGELOG.md                 whole history
-#   git cliff --tag v0.0.2 -o CHANGELOG.md    label the unreleased commits as the coming release
-#   git cliff --unreleased --tag v0.0.2 --strip header   notes for a GitHub release
+# Generates CHANGELOG.md from the conventional commit messages (see AGENTS.md). The file is committed
+# only at releases and has no "Unreleased" section:
+#   git cliff --unreleased                                preview what is coming (not written)
+#   git cliff --tag v0.0.2 -o CHANGELOG.md                the file for release 0.0.2
+#   git cliff --unreleased --tag v0.0.2 --strip all       notes for the GitHub release of 0.0.2
+#   git cliff --latest --strip all                        notes of the newest tagged release
 
 [changelog]
 header = """

@@ -133,8 +133,9 @@ so the changelog can be generated from the history. The details are in `AGENTS.m
 
 ### Changelog
 
-[`CHANGELOG.md`](CHANGELOG.md) is generated with [git-cliff](https://git-cliff.org) (`cliff.toml`):
-`winget install --id orhun.git-cliff -e`, then `git cliff -o CHANGELOG.md`.
+[`CHANGELOG.md`](CHANGELOG.md) is generated with [git-cliff](https://git-cliff.org) (`cliff.toml`) and
+committed only when a version is released: `winget install --id orhun.git-cliff -e`, then
+`git cliff --unreleased` to preview what is coming. The release steps are in `AGENTS.md`.
 
 ### License
 

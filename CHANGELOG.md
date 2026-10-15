@@ -3,17 +3,6 @@
 All notable changes to Time's up. This file is generated from the conventional commit messages with
 [git-cliff](https://git-cliff.org); do not edit it by hand (see `AGENTS.md`).
 
-## [Unreleased]
-
-### Build and packaging
-
-- **package:** Ship the zip without a config file ([ac06766](https://github.com/bpeiren/times-up/commit/ac067662a37d316182fef750c38e241d36bb6202))
-
-### Documentation
-
-- Require conventional commit messages for the changelog ([63999e7](https://github.com/bpeiren/times-up/commit/63999e7a5a5153ca7216493e10b1371d667807f3))
-- Drop the Co-Authored-By trailer from the commit convention ([a2a2433](https://github.com/bpeiren/times-up/commit/a2a2433c94aaa60348374768daaa59a69e694196))
-
 ## [0.0.1] - 2026-10-14
 
 ### Features
@@ -40,6 +29,5 @@ All notable changes to Time's up. This file is generated from the conventional c
 
 - Add the MIT license ([c4e7985](https://github.com/bpeiren/times-up/commit/c4e7985af4b4481b3f6c7a39a7de669c2a27f560))
 
-[Unreleased]: https://github.com/bpeiren/times-up/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/bpeiren/times-up/releases/tag/v0.0.1
 
