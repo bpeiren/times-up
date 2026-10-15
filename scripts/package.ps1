@@ -6,11 +6,13 @@
     1. cargo build --release --locked
     2. checks that the exe only imports Windows DLLs (tests/exe_dependencies.rs, run against the
        release exe)
-    3. dist\times-up-<version>-win-x64\ with times-up.exe, the commented sample times-up.toml,
-       README.txt and LICENSE, zipped next to it
+    3. dist\times-up-<version>-win-x64\ with times-up.exe, README.txt and LICENSE, zipped next to
+       it. There is deliberately no times-up.toml: the app writes the commented sample next to the
+       exe on its first start, so unzipping a new version over an old folder never overwrites a
+       teacher's timetable.
     4. smoke test: unzips into a fresh temporary folder, starts the exe from there, checks that
-       the window exists and the process keeps running, that nothing but the packaged files is in
-       the folder afterwards, then stops it
+       the window exists and the process keeps running, that the exe created times-up.toml with
+       exactly the sample (assets\times-up.sample.toml) and nothing else, then stops it
     Optionally measures idle memory and CPU of the packaged exe.
 
 .PARAMETER SkipSmoke
@@ -71,10 +73,20 @@ if (Test-Path $folder) {
 }
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Copy-Item $exe (Join-Path $folder 'times-up.exe')
-Copy-Item (Join-Path $root 'assets\times-up.sample.toml') (Join-Path $folder 'times-up.toml')
 Copy-Item (Join-Path $root 'assets\README.txt') (Join-Path $folder 'README.txt')
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $folder 'LICENSE')
 Compress-Archive -Path $folder -DestinationPath $zip -CompressionLevel Optimal
+
+# The zip must not contain a config file (see the description above).
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::OpenRead($zip)
+try {
+    $inZip = ($archive.Entries | ForEach-Object { $_.FullName -replace '^[^/]+/', '' } | Sort-Object) -join ', '
+} finally {
+    $archive.Dispose()
+}
+$expectedInZip = 'LICENSE, README.txt, times-up.exe'
+if ($inZip -ne $expectedInZip) { throw "Unexpected zip contents: [$inZip], expected [$expectedInZip]" }
 
 $exeSize = (Get-Item (Join-Path $folder 'times-up.exe')).Length
 $zipSize = (Get-Item $zip).Length
@@ -115,17 +127,19 @@ if (-not $SkipSmoke) {
         Expand-Archive -Path $zip -DestinationPath $scratch
         $unpacked = Join-Path $scratch $name
         $before = (Get-ChildItem $unpacked | ForEach-Object Name | Sort-Object) -join ', '
-        $sampleBefore = (Get-FileHash (Join-Path $unpacked 'times-up.toml')).Hash
+        if ($before -ne $expectedInZip) { throw "Unexpected unpacked files: [$before]" }
         $process = Start-Process (Join-Path $unpacked 'times-up.exe') -PassThru
         if (-not (Wait-ForBarWindow 10)) { throw 'The window did not appear within 10 seconds.' }
         Start-Sleep -Seconds 3
         if ($process.HasExited) { throw "The exe exited early with code $($process.ExitCode)." }
         $after = (Get-ChildItem $unpacked | ForEach-Object Name | Sort-Object) -join ', '
-        if ($before -ne $after) { throw "The exe changed the folder: [$before] -> [$after]" }
-        if ($sampleBefore -ne (Get-FileHash (Join-Path $unpacked 'times-up.toml')).Hash) {
-            throw 'The exe rewrote the sample config although nothing was changed.'
+        $expectedAfter = 'LICENSE, README.txt, times-up.exe, times-up.toml'
+        if ($after -ne $expectedAfter) { throw "The exe left [$after] in the folder, expected [$expectedAfter]" }
+        $sample = (Get-FileHash (Join-Path $root 'assets\times-up.sample.toml')).Hash
+        if ($sample -ne (Get-FileHash (Join-Path $unpacked 'times-up.toml')).Hash) {
+            throw 'The config the exe created is not the commented sample.'
         }
-        Write-Host "   OK: started from $unpacked, window present, still running, folder unchanged ($after)"
+        Write-Host "   OK: started from $unpacked, window present, still running, created times-up.toml (the sample) and nothing else"
     } finally {
         if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
         Start-Sleep -Milliseconds 300

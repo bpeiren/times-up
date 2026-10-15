@@ -66,3 +66,20 @@ Refs: TASK-12
 - One logical change per commit. Task bookkeeping on its own is `chore(backlog): ...`.
 - The whole history follows this format: the early commits were converted once, before v0.0.1
   was re-tagged on the rewritten history.
+
+## Changelog
+
+`CHANGELOG.md` is generated from the commit messages with [git-cliff](https://git-cliff.org), configured
+in `cliff.toml`. Never edit it by hand. Install it with `winget install --id orhun.git-cliff -e`.
+
+It is committed **only when releasing** and never has an "Unreleased" section. Between releases the
+file is not touched, so it cannot go stale, and pull requests do not conflict over it.
+
+- See what is unreleased (printed, not written): `git cliff --unreleased`
+- Release X.Y.Z: `git cliff --tag vX.Y.Z -o CHANGELOG.md`, commit it with the version bump as
+  `chore(release): X.Y.Z`, then tag `vX.Y.Z` on that commit.
+- Notes for the GitHub release: `git cliff --unreleased --tag vX.Y.Z --strip all` before tagging, or
+  `git cliff --latest --strip all` after.
+- Left out of the changelog: `chore`, `test` and `ci` commits, and `docs` or `build` commits scoped
+  `groma`, `backlog` or `release`. Everything else is listed by type, so write subjects a user can
+  read.

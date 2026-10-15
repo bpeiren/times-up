@@ -9,11 +9,12 @@ all settings in a text file next to it, so it is portable (a USB stick works).
 
 ## For teachers
 
-Download the zip, put `times-up.exe` and `times-up.toml` in any folder and start the exe. The
-`README.txt` in the zip explains the rest; in short:
+Download the zip, put `times-up.exe` in any folder and start it; it writes `times-up.toml`, a
+commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; your own
+`times-up.toml` stays untouched. The `README.txt` in the zip explains the rest; in short:
 
 - The bar appears 5 minutes before a class and hides shortly after the last class ends. **Outside
-  class time you will not see it**: the sample `times-up.toml` only has morning classes (08:30 to
+  class time you will not see it**: the sample timetable only has morning classes (08:30 to
   12:05), so edit it to your own timetable first.
 - A small icon in the notification area (maybe behind the `^` arrow) shows that the app is running,
   also when the bar is hidden. Click it for the same menu as a right-click on the bar.
@@ -129,6 +130,12 @@ logic.
 
 [Conventional Commits](https://www.conventionalcommits.org/) (`feat(bar): ...`, `fix(window): ...`),
 so the changelog can be generated from the history. The details are in `AGENTS.md`.
+
+### Changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) is generated with [git-cliff](https://git-cliff.org) (`cliff.toml`) and
+committed only when a version is released: `winget install --id orhun.git-cliff -e`, then
+`git cliff --unreleased` to preview what is coming. The release steps are in `AGENTS.md`.
 
 ### License
 
