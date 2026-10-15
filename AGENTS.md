@@ -51,6 +51,8 @@ Refs: TASK-12
 - **Breaking changes:** add `!` after the type or scope and a `BREAKING CHANGE:` footer, e.g. when
   the `times-up.toml` format changes in a way that old files stop working.
 - **Footers:** `Refs: TASK-n` for the Backlog task. No `Co-Authored-By:` trailers.
+- **No attribution lines:** never add a "Generated with Claude Code" (or similar) line to a pull
+  request description, and never add `Co-Authored-By:` trailers to commits.
 - One logical change per commit. Task bookkeeping on its own is `chore(backlog): ...`.
 - The whole history follows this format: the early commits were converted once, before v0.0.1
   was re-tagged on the rewritten history.
