@@ -131,6 +131,11 @@ logic.
 [Conventional Commits](https://www.conventionalcommits.org/) (`feat(bar): ...`, `fix(window): ...`),
 so the changelog can be generated from the history. The details are in `AGENTS.md`.
 
+### Changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) is generated with [git-cliff](https://git-cliff.org) (`cliff.toml`):
+`winget install --id orhun.git-cliff -e`, then `git cliff -o CHANGELOG.md`.
+
 ### License
 
 [MIT](LICENSE), copyright (c) 2026 Bart Peiren. The zip contains the license text.
