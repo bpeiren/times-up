@@ -39,6 +39,13 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   too, a banner asks: *Replace* (Enter) puts the saved settings on the bar, *Save only* (Esc)
   keeps your temporary changes on the bar until the class ends. It asks once per running class;
   closing the window counts as *Save only*.
+- The *General* tab of the Settings window holds the rest, so the file never has to be opened: the
+  six colours of the bar (click a colour to choose another one in the Windows colour dialog, the
+  small bar above them previews the result, *Track opacity* and *Reset colours* are there too) and
+  the lead-in, the time the bar stays after the last class, the default break and the default
+  orange and red minutes (click *-* and *+*). Values that make no sense are refused with a message,
+  for example red longer than orange. Each change is saved to `times-up.toml` on the click, keeping
+  your comments and everything else in the file, and shows on the bar at once.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be
@@ -134,6 +141,7 @@ logic.
 | `win::app` | Start-up, the per-second work, saving, menu commands |
 | `store` | The one owner of the loaded settings: the file poll and every edit go through it, views redraw when its revision changes, and the bar's temporary changes are kept apart from the saved timetable |
 | `settings`, `strings` | The Settings window's layout and frame as plain geometry; every UI text in one place |
+| `general` | The General tab: colours with a preview, lead-in, linger and the default minutes, with the rules for changing them |
 | `banner` | The Replace / Save only question for the running class: geometry and painting |
 | `timetable`, `detail` | The week overview and the detail bar of the selected class: editing rules, geometry and painting, without Win32 |
 | `win::settings_window` | The Settings window: a resizable window whose contents we draw |

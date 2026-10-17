@@ -9,6 +9,26 @@ pub const LABEL_QUIT: &str = "Quit";
 
 pub const SETTINGS_TITLE: &str = "Time's up - Settings";
 pub const SECTION_TIMETABLE: &str = "Timetable";
+pub const SECTION_GENERAL: &str = "General";
+
+pub const GENERAL_COLORS: &str = "Colours";
+pub const GENERAL_TIMES: &str = "Times";
+pub const COLOR_GREEN: &str = "Green";
+pub const COLOR_ORANGE: &str = "Orange";
+pub const COLOR_RED: &str = "Red";
+pub const COLOR_BREAK: &str = "Break";
+pub const COLOR_TRACK: &str = "Track";
+pub const COLOR_TEXT: &str = "Text";
+pub const FIELD_TRACK_OPACITY: &str = "Track opacity";
+pub const BUTTON_RESET_COLORS: &str = "Reset colours";
+pub const PREVIEW_TEXT: &str = "12:34";
+pub const FIELD_LEAD_IN: &str = "Lead-in";
+pub const FIELD_LINGER: &str = "Stays after last class";
+pub const FIELD_BREAK: &str = "Default break";
+pub const FIELD_ORANGE: &str = "Orange before end";
+pub const FIELD_RED: &str = "Red before end";
+pub const AT_LEAST: &str = "cannot go below";
+pub const AT_MOST: &str = "cannot go above";
 
 /// Indexed by `Weekday::index`.
 pub const DAY_NAMES: [&str; 7] = [

@@ -28,7 +28,9 @@ The bar
     Save as default for this slot   keeps those changes for this class from now on
     Settings...                     opens the Settings window: the week, with classes you can
                                     drag, resize, add (+) and remove (Delete),
-                                    and the break and warning times of the selected class
+                                    and the break and warning times of the selected class;
+                                    its General tab sets the colours, the lead-in and the
+                                    default break and warning minutes
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit

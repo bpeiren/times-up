@@ -22,15 +22,17 @@ const TAB_BAR: Rgba = Rgba::rgb(0x2a, 0x2b, 0x2f);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Timetable,
+    General,
 }
 
 impl Section {
     /// In tab order.
-    pub const ALL: [Section; 1] = [Section::Timetable];
+    pub const ALL: [Section; 2] = [Section::Timetable, Section::General];
 
     pub const fn label(self) -> &'static str {
         match self {
             Section::Timetable => strings::SECTION_TIMETABLE,
+            Section::General => strings::SECTION_GENERAL,
         }
     }
 }
@@ -141,9 +143,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_is_one_section_and_it_is_the_timetable() {
-        assert_eq!(Section::ALL, [Section::Timetable]);
+    fn there_are_two_sections_the_timetable_first() {
+        assert_eq!(Section::ALL, [Section::Timetable, Section::General]);
         assert_eq!(Section::Timetable.label(), "Timetable");
+        assert_eq!(Section::General.label(), "General");
     }
 
     #[test]
@@ -151,7 +154,13 @@ mod tests {
         let l = layout(800, 500, 1.0);
         assert_eq!(l.tab_bar, Rect::new(0, 0, 800, 40));
         assert_eq!(l.content, Rect::new(0, 40, 800, 460));
-        assert_eq!(l.tabs, vec![(Section::Timetable, Rect::new(0, 0, 130, 40))]);
+        assert_eq!(
+            l.tabs,
+            vec![
+                (Section::Timetable, Rect::new(0, 0, 130, 40)),
+                (Section::General, Rect::new(130, 0, 130, 40)),
+            ]
+        );
     }
 
     #[test]
@@ -172,7 +181,9 @@ mod tests {
         let l = layout(800, 500, 1.0);
         assert_eq!(l.tab_at(0, 0), Some(Section::Timetable));
         assert_eq!(l.tab_at(129, 39), Some(Section::Timetable));
-        assert_eq!(l.tab_at(130, 10), None);
+        assert_eq!(l.tab_at(130, 10), Some(Section::General));
+        assert_eq!(l.tab_at(259, 39), Some(Section::General));
+        assert_eq!(l.tab_at(260, 10), None);
         assert_eq!(l.tab_at(10, 40), None);
         assert_eq!(l.tab_at(-1, 10), None);
     }

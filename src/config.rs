@@ -58,6 +58,15 @@ impl Rgba {
             a: if hex.len() == 8 { byte(6)? } else { 255 },
         })
     }
+
+    /// `#rrggbb`, or `#rrggbbaa` when not fully opaque; what [`Rgba::parse`] reads back.
+    pub fn to_hex(self) -> String {
+        if self.a == 255 {
+            format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+        } else {
+            format!("#{:02x}{:02x}{:02x}{:02x}", self.r, self.g, self.b, self.a)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +128,58 @@ impl Default for Config {
             settings_window: WindowRect::default(),
             default_break: DEFAULT_BREAK_LEN,
             warnings: Warnings::default(),
+        }
+    }
+}
+
+/// The `[general]` times: when the bar appears and goes, and the defaults classes follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct General {
+    /// The bar appears this long before a class starts.
+    pub lead_in: Secs,
+    /// ...and stays this long after the last class ends.
+    pub linger: Secs,
+    /// Length of the break that classes of 100 minutes or more get by default.
+    pub default_break: Secs,
+    /// Warning thresholds used by classes that do not set their own.
+    pub warnings: Warnings,
+}
+
+impl General {
+    pub const MAX_LEAD_IN: Secs = 60 * MINUTE;
+    pub const MAX_LINGER: Secs = 300;
+    pub const MIN_BREAK: Secs = MINUTE;
+    pub const MAX_BREAK: Secs = 30 * MINUTE;
+    pub const MAX_WARNING: Secs = 60 * MINUTE;
+
+    /// Why these values cannot be used, if they cannot. What the Settings window offers always
+    /// passes; the file itself is read more leniently.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.lead_in > Self::MAX_LEAD_IN {
+            return Err("The lead-in can be at most 60 minutes".to_string());
+        }
+        if self.linger > Self::MAX_LINGER {
+            return Err("The bar can stay at most 300 seconds".to_string());
+        }
+        if !(Self::MIN_BREAK..=Self::MAX_BREAK).contains(&self.default_break) {
+            return Err("The default break must be 1 to 30 minutes".to_string());
+        }
+        let Warnings { orange, red } = self.warnings;
+        if orange > Self::MAX_WARNING || red > Self::MAX_WARNING {
+            return Err("The orange and red times can be at most 60 minutes".to_string());
+        }
+        Warnings::new(orange, red).map_err(|_| "Red must not be longer than orange".to_string())?;
+        Ok(())
+    }
+}
+
+impl Config {
+    pub fn general(&self) -> General {
+        General {
+            lead_in: self.schedule.lead_in,
+            linger: self.schedule.linger,
+            default_break: self.default_break,
+            warnings: self.warnings,
         }
     }
 }
@@ -505,6 +566,53 @@ fn set_class(doc: &mut DocumentMut, day: Weekday, class: &Class) -> Result<(), C
     Ok(())
 }
 
+/// Replace the value of `key`, keeping the comment on its line; add it when it is missing.
+fn set_value(t: &mut dyn TableLike, key: &str, new: Value) {
+    if let Some(Item::Value(old)) = t.get_mut(key) {
+        let mut new = new;
+        *new.decor_mut() = old.decor().clone();
+        *old = new;
+    } else {
+        t.insert(key, Item::Value(new));
+    }
+}
+
+/// The table `name`, made when it is missing (or not a table).
+fn section_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut dyn TableLike {
+    let item = doc.entry(name).or_insert_with(|| Item::Table(Table::new()));
+    if item.as_table_like().is_none() {
+        *item = Item::Table(Table::new());
+    }
+    item.as_table_like_mut().expect("a table was just made")
+}
+
+fn set_general(doc: &mut DocumentMut, general: &General) {
+    let t = section_mut(doc, "general");
+    set_value(t, "lead_in_minutes", minutes_value(general.lead_in));
+    set_value(t, "linger_seconds", Value::from(i64::from(general.linger)));
+    set_value(
+        t,
+        "default_break_minutes",
+        minutes_value(general.default_break),
+    );
+    set_value(t, "orange_minutes", minutes_value(general.warnings.orange));
+    set_value(t, "red_minutes", minutes_value(general.warnings.red));
+}
+
+fn set_colors(doc: &mut DocumentMut, colors: &Colors) {
+    let t = section_mut(doc, "colors");
+    for (key, color) in [
+        ("green", colors.green),
+        ("orange", colors.orange),
+        ("red", colors.red),
+        ("break", colors.break_gap),
+        ("track", colors.track),
+        ("text", colors.text),
+    ] {
+        set_value(t, key, Value::from(color.to_hex()));
+    }
+}
+
 /// `32400` -> `"09:00"`; the end of the day is `"24:00"`.
 fn format_time(secs: Secs) -> String {
     let minutes = secs.div_ceil(MINUTE);
@@ -647,6 +755,30 @@ impl ConfigFile {
             set_window(doc, "settings_window", rect);
             Ok(())
         })
+    }
+
+    /// Write the `[general]` times, keeping the comments and everything else in the file.
+    pub fn save_general(&mut self, general: &General) -> Result<(), ConfigError> {
+        general.validate().map_err(ConfigError::Invalid)?;
+        self.edit(|doc| {
+            set_general(doc, general);
+            Ok(())
+        })
+    }
+
+    /// Write all six `[colors]`, keeping the comments and everything else in the file.
+    pub fn save_colors(&mut self, colors: &Colors) -> Result<(), ConfigError> {
+        self.edit(|doc| {
+            set_colors(doc, colors);
+            Ok(())
+        })
+    }
+
+    /// Read the file as it is now; it counts as seen, so [`ConfigFile::poll`] stays quiet.
+    pub fn reload(&mut self) -> Result<Loaded, ConfigError> {
+        let text = fs::read_to_string(&self.path).map_err(|e| ConfigError::Io(e.to_string()))?;
+        self.stamp = self.stat();
+        Ok(parse(&text))
     }
 
     /// Store the break and warning thresholds of `class` as its defaults (the file entry with the
