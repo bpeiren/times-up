@@ -76,10 +76,14 @@ It is committed **only when releasing** and never has an "Unreleased" section. B
 file is not touched, so it cannot go stale, and pull requests do not conflict over it.
 
 - See what is unreleased (printed, not written): `git cliff --unreleased`
-- Release X.Y.Z: `git cliff --tag vX.Y.Z -o CHANGELOG.md`, commit it with the version bump as
-  `chore(release): X.Y.Z`, then tag `vX.Y.Z` on that commit.
-- Notes for the GitHub release: `git cliff --unreleased --tag vX.Y.Z --strip all` before tagging, or
-  `git cliff --latest --strip all` after.
+- Release: never by hand, run `.\scripts\release.ps1` (`-DryRun` first; `-Version X.Y.Z` to choose
+  the version, otherwise it is proposed from the commits; `-Draft`, `-Prerelease`). It checks,
+  builds, bumps the version, generates `CHANGELOG.md` and `release-notes/vX.Y.Z.md`, refreshes the
+  Measured table of the README, commits all that as one signed `chore(release): X.Y.Z`, tags it
+  and publishes the GitHub release, then verifies the download. A person reviews the generated
+  notes before anything is committed. If it stops, its help (`Get-Help .\scripts\release.ps1`) says
+  what to do at each step. Never move a tag that was pushed.
+- `git cliff --latest --strip all` prints the notes of the newest tagged release.
 - Left out of the changelog: `chore`, `test` and `ci` commits, and `docs` or `build` commits scoped
   `groma`, `backlog` or `release`. Everything else is listed by type, so write subjects a user can
   read.

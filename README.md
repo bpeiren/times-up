@@ -150,7 +150,20 @@ so the changelog can be generated from the history. The details are in `AGENTS.m
 
 [`CHANGELOG.md`](CHANGELOG.md) is generated with [git-cliff](https://git-cliff.org) (`cliff.toml`) and
 committed only when a version is released: `winget install --id orhun.git-cliff -e`, then
-`git cliff --unreleased` to preview what is coming. The release steps are in `AGENTS.md`.
+`git cliff --unreleased` to preview what is coming.
+
+### Releasing
+
+`.\scripts\release.ps1` makes a release: it runs the checks (`cargo fmt --check`, clippy, tests, the
+package dependency check and smoke test), bumps the version, generates `CHANGELOG.md`,
+`release-notes\vX.Y.Z.md` (from `release-notes\template.md` and the commits) and the Measured table
+above, asks you to review the notes, commits everything as a signed `chore(release): X.Y.Z`, tags it,
+publishes the GitHub release with the zip and its `.sha256`, and checks the download.
+`-DryRun` does everything except the commit, push, tag and release; `-Version X.Y.Z` overrides the
+proposed version; `-Draft` and `-Prerelease` mark the release. It needs `gh` (logged in),
+[git-cliff](https://git-cliff.org) and a working commit signing setup. What to do when it stops at a
+given step is in `Get-Help .\scripts\release.ps1 -Full`. `.\scripts\release.tests.ps1` tests its
+helpers.
 
 ### License
 

@@ -13,6 +13,7 @@
     4. smoke test: unzips into a fresh temporary folder, starts the exe from there, checks that
        the window exists and the process keeps running, that the exe created times-up.toml with
        exactly the sample (assets\times-up.sample.toml) and nothing else, then stops it
+    Writes <zip>.sha256 next to the zip (sha256sum format).
     Optionally measures idle memory and CPU of the packaged exe.
 
 .PARAMETER SkipSmoke
@@ -22,6 +23,10 @@
     When greater than 0, run the packaged exe for that many seconds with a class in progress and
     report size, working set, private memory and CPU use.
 
+.PARAMETER MeasureFile
+    With -MeasureSeconds, also write the measurement as JSON (exeBytes, zipBytes, workingSetMB,
+    privateMB, cpuPercent) to this path. scripts\release.ps1 uses it to refresh the README.
+
 .EXAMPLE
     .\scripts\package.ps1
     .\scripts\package.ps1 -MeasureSeconds 30
@@ -29,7 +34,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipSmoke,
-    [int]$MeasureSeconds = 0
+    [int]$MeasureSeconds = 0,
+    [string]$MeasureFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,6 +99,8 @@ $zipSize = (Get-Item $zip).Length
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 Write-Host ("   exe {0:N0} bytes, zip {1:N0} bytes" -f $exeSize, $zipSize)
 Write-Host "   SHA256 $hash"
+# sha256sum format (lower case hash, two spaces, file name), so `sha256sum -c` understands it.
+[IO.File]::WriteAllText("$zip.sha256", "$($hash.ToLower())  $name.zip`n")
 
 Add-Type -ErrorAction SilentlyContinue @"
 using System; using System.Runtime.InteropServices;
@@ -175,6 +183,15 @@ if ($MeasureSeconds -gt 0) {
         Write-Host ("   private memory {0:N1} MB" -f ($process.PrivateMemorySize64 / 1MB))
         Write-Host ("   CPU            {0:N2} % of one core over {1:N0} s" -f ((($cpu1 - $cpu0) / $elapsed) * 100), ($elapsed / 1000))
         Write-Host ("   threads {0}, handles {1}" -f $process.Threads.Count, $process.HandleCount)
+        if ($MeasureFile) {
+            [ordered]@{
+                exeBytes     = $exeSize
+                zipBytes     = $zipSize
+                workingSetMB = [math]::Round($process.WorkingSet64 / 1MB, 1)
+                privateMB    = [math]::Round($process.PrivateMemorySize64 / 1MB, 1)
+                cpuPercent   = [math]::Round((($cpu1 - $cpu0) / $elapsed) * 100, 2)
+            } | ConvertTo-Json | Set-Content $MeasureFile -Encoding utf8
+        }
     } finally {
         if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
         Start-Sleep -Milliseconds 300

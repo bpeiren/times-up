@@ -66,3 +66,11 @@ commit_parsers = [
   { message = "^build", group = "<!-- 4 -->Build and packaging" },
   { message = "^docs", group = "<!-- 5 -->Documentation" },
 ]
+
+[bump]
+# Suits 0.x versions: a breaking change bumps the minor and a feature only the patch, so the
+# release script (scripts/release.ps1) proposes 0.0.2 after 0.0.1 and does not jump to 1.0.0.
+# The maintainer can always override the proposal with -Version.
+features_always_bump_minor = false
+breaking_always_bump_major = false
+initial_tag = "0.0.1"
