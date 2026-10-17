@@ -9,4 +9,5 @@ pub mod editing;
 pub mod icon;
 pub mod interaction;
 pub mod schedule;
+pub mod store;
 pub mod win;
