@@ -21,3 +21,15 @@ pub const DAY_NAMES: [&str; 7] = [
     "Sunday",
 ];
 pub const BUTTON_REMOVE_CLASS: &str = "Remove class";
+pub const BUTTON_ADD_BREAK: &str = "Add break";
+pub const BUTTON_REMOVE_BREAK: &str = "Remove break";
+
+pub const DETAIL_HINT: &str = "Select a class to edit its break and warning times";
+pub const TIP_IDLE: &str = "Drag the lines to change the break and the orange and red times";
+pub const TIP_ADDING: &str = "Click where the break should be; Esc cancels";
+pub const TIP_CLASS: &str = "Class";
+pub const TIP_BLOCK: &str = "Block";
+pub const TIP_BREAK: &str = "Break";
+pub const TIP_ORANGE: &str = "Orange";
+pub const TIP_RED: &str = "Red";
+pub const TIP_FROM: &str = "from";

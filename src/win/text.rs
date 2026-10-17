@@ -8,15 +8,28 @@ use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CLIP_DEFAULT_PRECIS,
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER,
-    DT_NOCLIP, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FF_DONTCARE,
+    DT_LEFT, DT_NOCLIP, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FF_DONTCARE,
     FW_SEMIBOLD, HGDIOBJ, OUT_DEFAULT_PRECIS, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
     VARIABLE_PITCH,
 };
 use windows::core::w;
 
+use crate::canvas::Align;
+
 /// Render `text` centred in a `w` x `h` coverage mask using a Segoe UI font of `font_px` pixels
 /// (device pixels, so the caller scales for DPI). Returns `None` if GDI fails.
 pub fn render_mask(text: &str, w: u32, h: u32, font_px: i32) -> Option<Vec<u8>> {
+    render_mask_aligned(text, w, h, font_px, Align::Center)
+}
+
+/// Like [`render_mask`], with the text against the left edge or in the middle.
+pub fn render_mask_aligned(
+    text: &str,
+    w: u32,
+    h: u32,
+    font_px: i32,
+    align: Align,
+) -> Option<Vec<u8>> {
     if w == 0 || h == 0 || text.is_empty() {
         return Some(vec![0; (w as usize) * (h as usize)]);
     }
@@ -77,7 +90,12 @@ pub fn render_mask(text: &str, w: u32, h: u32, font_px: i32) -> Option<Vec<u8>> 
                 dc,
                 &mut wide,
                 &mut rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP,
+                match align {
+                    Align::Center => DT_CENTER,
+                    Align::Left => DT_LEFT,
+                } | DT_VCENTER
+                    | DT_SINGLELINE
+                    | DT_NOCLIP,
             );
 
             let pixels =

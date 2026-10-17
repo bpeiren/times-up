@@ -32,8 +32,9 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   its place and size are remembered). It shows the week: click a class to select it, drag it to
   move it or drag its edges to resize it (5 minute steps, never over a neighbour), use the *+*
   button of a day to add a class, and *Remove class* or the Delete key to remove the selected one.
-  Changes are saved to `times-up.toml` when you let go of the mouse. Breaks and warning times are
-  still edited on the bar or in the file.
+  The selected class is drawn large below the week: drag the break or the orange and red lines,
+  hover for times and durations, *Add break* (click where it should start, Esc cancels) and *Remove
+  break*. Changes are saved to `times-up.toml` when you let go of the mouse.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be
@@ -129,6 +130,7 @@ logic.
 | `win::app` | Start-up, the per-second work, saving, menu commands |
 | `store` | The one owner of the loaded settings: the file poll and every edit go through it, and views redraw when its revision changes |
 | `settings`, `strings` | The Settings window's layout and frame as plain geometry; every UI text in one place |
+| `timetable`, `detail` | The week overview and the detail bar of the selected class: editing rules, geometry and painting, without Win32 |
 | `win::settings_window` | The Settings window: a resizable window whose contents we draw |
 | `win::menu`, `win::autostart` | The right-click menu and the *Start with Windows* registry entry |
 | `icon`, `win::tray` | The notification-area icon, drawn at run time, and its click handling |

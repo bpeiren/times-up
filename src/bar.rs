@@ -3,7 +3,7 @@
 
 use crate::canvas::{Canvas, RectF};
 use crate::config::{Colors, Rgba};
-use crate::schedule::{Schedule, Secs, State, Weekday};
+use crate::schedule::{Class, Schedule, Secs, State, Weekday};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SegmentKind {
@@ -88,6 +88,32 @@ pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
     let total = class.duration().max(1) as f32;
     let share = |secs: Secs| secs as f32 / total;
 
+    let segments = segments(class);
+    let middle = |start: Secs, end: Secs| (share(start) + share(end)) / 2.0;
+    let label_center = match (focus, class.brk) {
+        (Focus::Block(i), _) => {
+            let b = class.block(i);
+            middle(b.start, b.end)
+        }
+        (Focus::LastBlock, _) => {
+            let b = class.block(class.block_count() - 1);
+            middle(b.start, b.end)
+        }
+        (Focus::Break, Some(b)) => middle(b.start, b.end()),
+        (Focus::Break, None) | (Focus::Whole, _) => 0.5,
+    };
+    Some(BarView {
+        label_center,
+        progress: share(progress_secs.min(class.duration())),
+        segments,
+        label,
+    })
+}
+
+/// The blocks and the break of `class` as shares of the whole class.
+fn segments(class: &Class) -> Vec<Segment> {
+    let total = class.duration().max(1) as f32;
+    let share = |secs: Secs| secs as f32 / total;
     let mut segments = Vec::with_capacity(3);
     for index in 0..class.block_count() {
         let block = class.block(index);
@@ -110,25 +136,18 @@ pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
             });
         }
     }
-    let middle = |start: Secs, end: Secs| (share(start) + share(end)) / 2.0;
-    let label_center = match (focus, class.brk) {
-        (Focus::Block(i), _) => {
-            let b = class.block(i);
-            middle(b.start, b.end)
-        }
-        (Focus::LastBlock, _) => {
-            let b = class.block(class.block_count() - 1);
-            middle(b.start, b.end)
-        }
-        (Focus::Break, Some(b)) => middle(b.start, b.end()),
-        (Focus::Break, None) | (Focus::Whole, _) => 0.5,
-    };
-    Some(BarView {
-        label_center,
-        progress: share(progress_secs.min(class.duration())),
-        segments,
-        label,
-    })
+    segments
+}
+
+/// `class` as a bar that is completely filled in, so that every zone and the break show in their
+/// colour (what the Settings window edits). It has no label.
+pub fn class_view(class: &Class) -> BarView {
+    BarView {
+        progress: 1.0,
+        segments: segments(class),
+        label: String::new(),
+        label_center: 0.5,
+    }
 }
 
 /// How much of the break colour shows before the break has been reached.

@@ -8,8 +8,8 @@ use crate::interaction::{Rect, fit_on_screen};
 use crate::strings;
 
 /// Logical size (96 DPI) a Settings window starts with, and the smallest it may get.
-pub const DEFAULT_SIZE: (i32, i32) = (860, 520);
-pub const MIN_SIZE: (i32, i32) = (480, 320);
+pub const DEFAULT_SIZE: (i32, i32) = (900, 660);
+pub const MIN_SIZE: (i32, i32) = (640, 500);
 
 const TAB_BAR_HEIGHT: f32 = 40.0;
 const TAB_WIDTH: f32 = 130.0;
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn sizes_follow_the_display_scale() {
         assert_eq!(default_size(1.0), DEFAULT_SIZE);
-        assert_eq!(default_size(1.5), (1290, 780));
-        assert_eq!(min_size(2.0), (960, 640));
+        assert_eq!(default_size(1.5), (1350, 990));
+        assert_eq!(min_size(2.0), (1280, 1000));
     }
 
     const SCREEN: Rect = Rect::new(0, 0, 1920, 1040);
@@ -198,29 +198,29 @@ mod tests {
     #[test]
     fn without_a_saved_rectangle_the_window_is_centred_on_the_primary_monitor() {
         let r = placement(&WindowRect::default(), 1.0, &[SCREEN]);
-        assert_eq!(r, Rect::new(530, 260, 860, 520));
+        assert_eq!(r, Rect::new(510, 190, 900, 660));
         let r = placement(&WindowRect::default(), 2.0, &[SCREEN]);
-        assert_eq!((r.w, r.h), (1720, 1040), "as big as the monitor allows");
-        assert_eq!((r.x, r.y), (100, 0));
+        assert_eq!((r.w, r.h), (1800, 1040), "as big as the monitor allows");
+        assert_eq!((r.x, r.y), (60, 0));
     }
 
     #[test]
     fn a_saved_rectangle_is_kept_when_it_is_visible() {
-        let w = saved(Some(100), Some(50), Some(700), Some(400));
-        assert_eq!(placement(&w, 1.0, &[SCREEN]), Rect::new(100, 50, 700, 400));
+        let w = saved(Some(100), Some(50), Some(700), Some(520));
+        assert_eq!(placement(&w, 1.0, &[SCREEN]), Rect::new(100, 50, 700, 520));
     }
 
     #[test]
     fn a_saved_rectangle_on_a_missing_monitor_is_pulled_back() {
-        let w = saved(Some(5000), Some(5000), Some(700), Some(400));
+        let w = saved(Some(5000), Some(5000), Some(700), Some(520));
         let r = placement(&w, 1.0, &[SCREEN]);
         assert!(
             r.overlap_area(&SCREEN) == r.area(),
             "{r:?} is fully visible"
         );
-        let off = saved(Some(1800), Some(50), Some(700), Some(400));
+        let off = saved(Some(1800), Some(50), Some(700), Some(520));
         let r = placement(&off, 1.0, &[SCREEN]);
-        assert_eq!(r, Rect::new(1220, 50, 700, 400));
+        assert_eq!(r, Rect::new(1220, 50, 700, 520));
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
         let r = placement(&w, 1.0, &[SCREEN]);
         assert_eq!((r.w, r.h), (MIN_SIZE.0, DEFAULT_SIZE.1));
         let no_monitor = placement(&WindowRect::default(), 1.0, &[]);
-        assert_eq!(no_monitor, Rect::new(0, 0, 860, 520));
+        assert_eq!(no_monitor, Rect::new(0, 0, 900, 660));
     }
 
     #[test]
