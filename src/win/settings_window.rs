@@ -16,7 +16,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_DELETE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, VK_DELETE, VK_ESCAPE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, IDC_ARROW, IsIconic, IsWindow,
@@ -32,10 +34,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::text::render_mask;
+use super::text::{render_mask, render_mask_aligned};
 use super::{monitors, wide, window};
-use crate::canvas::Canvas;
+use crate::canvas::{Align, Canvas};
 use crate::config::{Rgba, WindowRect};
+use crate::detail::{self, Detail};
 use crate::interaction::{CursorShape, Rect};
 use crate::settings::{self, Layout, Section};
 use crate::store::Store;
@@ -61,6 +64,7 @@ struct State {
     canvas: Canvas,
     section: Section,
     timetable: Timetable,
+    detail: Detail,
     /// The store revision that was last painted.
     revision: u64,
 }
@@ -80,7 +84,27 @@ impl State {
     /// Where the week overview sits for what the store and the drag in progress hold now.
     fn week_layout(&self, hwnd: HWND) -> timetable::Layout {
         let (days, axis) = self.timetable.days_and_axis(&self.store.borrow());
-        timetable::layout(self.layout(hwnd).content, Self::scale(hwnd), &days, axis)
+        timetable::layout(self.areas(hwnd).0, Self::scale(hwnd), &days, axis)
+    }
+
+    /// The area of the week and the area of the detail bar below it.
+    fn areas(&self, hwnd: HWND) -> (Rect, Rect) {
+        detail::split(self.layout(hwnd).content, Self::scale(hwnd))
+    }
+
+    fn detail_layout(&self, hwnd: HWND) -> detail::Layout {
+        detail::layout(self.areas(hwnd).1, Self::scale(hwnd))
+    }
+
+    /// End the Add break mode when the class it was started for is no longer the selected one.
+    fn sync_detail(&mut self) {
+        let store = self.store.borrow();
+        let selection = self.timetable.selected(&store);
+        self.detail.sync(&store, selection);
+    }
+
+    fn is_dragging(&self) -> bool {
+        self.timetable.is_dragging() || self.detail.is_dragging()
     }
 
     /// Resize the canvas to the client area.
@@ -92,6 +116,7 @@ impl State {
     }
 
     fn paint_canvas(&mut self, hwnd: HWND) {
+        self.sync_detail();
         self.fit_canvas(hwnd);
         self.revision = self.store.borrow().revision();
         let layout = self.layout(hwnd);
@@ -107,13 +132,16 @@ impl State {
         }
         match self.section {
             Section::Timetable => {
-                let week = self.week_layout(hwnd);
+                let (week, below) = (self.week_layout(hwnd), self.detail_layout(hwnd));
                 let store = self.store.borrow();
                 let canvas = &mut self.canvas;
-                self.timetable
-                    .paint(canvas, &store, &week, &mut |canvas, text, area, color| {
-                        draw_text(canvas, text, area, color);
-                    });
+                let mut text = |canvas: &mut Canvas, text: &str, area, color, align| {
+                    draw_text(canvas, text, area, color, align);
+                };
+                self.timetable.paint(canvas, &store, &week, &mut text);
+                let selection = self.timetable.selected(&store);
+                self.detail
+                    .paint(canvas, &store, selection, &below, &mut text);
             }
         }
     }
@@ -127,26 +155,53 @@ impl State {
             return;
         }
         match self.section {
+            Section::Timetable if contains(self.areas(hwnd).1, x, y) => {
+                let below = self.detail_layout(hwnd);
+                let mut store = self.store.borrow_mut();
+                let selection = self.timetable.selected(&store);
+                self.detail.press(&mut store, selection, &below, x, y);
+            }
             Section::Timetable => {
                 let week = self.week_layout(hwnd);
                 self.timetable
                     .press(&mut self.store.borrow_mut(), &week, x, y);
             }
         }
+        self.sync_detail();
         invalidate(hwnd);
     }
 
     fn drag(&mut self, hwnd: HWND, x: i32, y: i32) {
+        let below = self.detail_layout(hwnd);
+        let mut repaint = self.detail.moved(&below, x, y);
         if self.timetable.is_dragging() {
             let week = self.week_layout(hwnd);
             self.timetable.drag_to(&self.store.borrow(), &week, x, y);
+            repaint = true;
+        }
+        if repaint {
             invalidate(hwnd);
         }
     }
 
     fn release(&mut self, hwnd: HWND) {
-        if self.timetable.is_dragging() {
+        if self.is_dragging() {
             self.timetable.release(&mut self.store.borrow_mut());
+            self.detail.release(&mut self.store.borrow_mut());
+            invalidate(hwnd);
+        }
+    }
+
+    /// The mouse capture is gone: whatever was being dragged is given up.
+    fn cancel_drags(&mut self, hwnd: HWND) {
+        self.timetable.cancel();
+        self.detail.cancel();
+        invalidate(hwnd);
+    }
+
+    /// Escape leaves the Add break mode (or gives up a drag of the detail bar).
+    fn escape(&mut self, hwnd: HWND) {
+        if self.detail.escape() {
             invalidate(hwnd);
         }
     }
@@ -160,8 +215,14 @@ impl State {
         if y < self.layout(hwnd).content.y {
             return CursorShape::Arrow;
         }
+        let store = self.store.borrow();
+        if contains(self.areas(hwnd).1, x, y) || self.detail.is_dragging() {
+            let below = self.detail_layout(hwnd);
+            let selection = self.timetable.selected(&store);
+            return self.detail.cursor(&store, selection, &below, x, y);
+        }
         let week = self.week_layout(hwnd);
-        self.timetable.cursor(&self.store.borrow(), &week, x, y)
+        self.timetable.cursor(&store, &week, x, y)
     }
 
     /// Remember where the window is. A window that is minimised or maximised has no rectangle
@@ -183,15 +244,23 @@ impl State {
 }
 
 /// `text` centred in `area`, in a font that fits the height of `area`.
-fn draw_text(canvas: &mut Canvas, text: &str, area: Rect, color: Rgba) {
+fn draw_text(canvas: &mut Canvas, text: &str, area: Rect, color: Rgba, align: Align) {
     if area.w <= 0 || area.h <= 0 {
         return;
     }
     let (w, h) = (area.w as u32, area.h as u32);
-    let font_px = ((area.h as f32 * TEXT_SCALE) as i32).clamp(9, 22);
-    if let Some(mask) = render_mask(text, w, h, font_px) {
+    // Not wider than the area: a long word gets a smaller font instead of being cut off.
+    let by_width = (area.w as f32 / (text.chars().count().max(1) as f32 * 0.62)) as i32;
+    let font_px = ((area.h as f32 * TEXT_SCALE) as i32)
+        .clamp(9, 22)
+        .min(by_width.max(9));
+    if let Some(mask) = render_mask_aligned(text, w, h, font_px, align) {
         canvas.blend_mask(&mask, w, h, area.x, area.y, color);
     }
+}
+
+fn contains(r: Rect, x: i32, y: i32) -> bool {
+    x >= r.x && x < r.right() && y >= r.y && y < r.bottom()
 }
 
 fn cursor_id(shape: CursorShape) -> PCWSTR {
@@ -263,6 +332,7 @@ pub fn open(store: Rc<RefCell<Store>>) -> windows::core::Result<HWND> {
         canvas: Canvas::new(1, 1),
         section: Section::Timetable,
         timetable: Timetable::default(),
+        detail: Detail::default(),
         revision,
     });
     let raw = Box::into_raw(state);
@@ -394,7 +464,7 @@ unsafe extern "system" fn window_proc(
                 let (x, y) = client_xy(lparam);
                 let dragging = state_of(hwnd).is_some_and(|state| {
                     state.press(hwnd, x, y);
-                    state.timetable.is_dragging()
+                    state.is_dragging()
                 });
                 if dragging {
                     let _ = SetCapture(hwnd);
@@ -418,8 +488,13 @@ unsafe extern "system" fn window_proc(
             // The capture was taken away in the middle of a drag: give the drag up.
             WM_CAPTURECHANGED => {
                 if let Some(state) = state_of(hwnd) {
-                    state.timetable.cancel();
-                    invalidate(hwnd);
+                    state.cancel_drags(hwnd);
+                }
+                return LRESULT(0);
+            }
+            WM_KEYDOWN if wparam.0 == usize::from(VK_ESCAPE.0) => {
+                if let Some(state) = state_of(hwnd) {
+                    state.escape(hwnd);
                 }
                 return LRESULT(0);
             }
@@ -616,7 +691,7 @@ mod tests {
                 area.x + 30,
                 area.y + 40,
                 700,
-                450,
+                520,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
             SendMessageW(first, WM_EXITSIZEMOVE, None, None);
@@ -629,7 +704,7 @@ mod tests {
                 x: Some(area.x + 30),
                 y: Some(area.y + 40),
                 width: Some(700),
-                height: Some(450),
+                height: Some(520),
             }
         );
         close(first);
@@ -637,7 +712,7 @@ mod tests {
         let again = open(store).unwrap();
         assert_eq!(
             window_rect(again),
-            Rect::new(area.x + 30, area.y + 40, 700, 450)
+            Rect::new(area.x + 30, area.y + 40, 700, 520)
         );
         close(again);
     }
@@ -821,6 +896,127 @@ classes = [{ start = \"09:00\", end = \"09:50\" }]
             assert!(!state_of(hwnd).unwrap().timetable.is_dragging());
         }
         assert_eq!(store.borrow().revision(), 0);
+        close(hwnd);
+    }
+
+    /// Select Monday's class with a click, and return the detail layout.
+    fn select_monday(hwnd: HWND) -> detail::Layout {
+        use windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP;
+        let ((x, y), _) = class_and_plus(hwnd);
+        mouse(hwnd, WM_LBUTTONDOWN, x, y);
+        mouse(hwnd, WM_LBUTTONUP, x, y);
+        // SAFETY: on the window's thread.
+        unsafe { state_of(hwnd) }.unwrap().detail_layout(hwnd)
+    }
+
+    #[test]
+    fn add_break_works_through_the_window_and_escape_leaves_the_mode() {
+        use windows::Win32::UI::WindowsAndMessaging::{WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
+        let dir = Scratch::new("detail-add", MONDAY);
+        let store = dir.store();
+        let hwnd = open(store.clone()).unwrap();
+        let l = select_monday(hwnd);
+
+        // Escape leaves the mode...
+        mouse(hwnd, WM_LBUTTONDOWN, l.add.x + 3, l.add.y + 3);
+        mouse(hwnd, WM_LBUTTONUP, l.add.x + 3, l.add.y + 3);
+        // SAFETY: on the window's thread.
+        unsafe {
+            assert!(state_of(hwnd).unwrap().detail.is_adding());
+            SendMessageW(hwnd, WM_KEYDOWN, Some(WPARAM(0x1b)), None);
+            assert!(!state_of(hwnd).unwrap().detail.is_adding());
+        }
+
+        // ...and a click on the bar places the break and saves it.
+        mouse(hwnd, WM_LBUTTONDOWN, l.add.x + 3, l.add.y + 3);
+        mouse(hwnd, WM_LBUTTONUP, l.add.x + 3, l.add.y + 3);
+        let x = l.bar.x + l.bar.w * 2 / 5;
+        let y = l.bar.y + l.bar.h / 2;
+        mouse(hwnd, WM_MOUSEMOVE, x, y);
+        mouse(hwnd, WM_LBUTTONDOWN, x, y);
+        mouse(hwnd, WM_LBUTTONUP, x, y);
+        let class = store.borrow().schedule().classes(Weekday::Mon)[0].clone();
+        assert!(class.brk.is_some());
+        assert!(dir.text().contains("break_len"), "{}", dir.text());
+        close(hwnd);
+    }
+
+    #[test]
+    fn dragging_a_break_edge_through_the_window_saves_on_release() {
+        use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONUP, WM_MOUSEMOVE};
+        let long = "[monday]
+classes = [{ start = \"09:00\", end = \"10:40\" }]
+";
+        let dir = Scratch::new("detail-drag", long);
+        let store = dir.store();
+        let hwnd = open(store.clone()).unwrap();
+        let l = select_monday(hwnd);
+        let before = store.borrow().schedule().classes(Weekday::Mon)[0]
+            .brk
+            .unwrap();
+        let duration = 100 * 60;
+        let at = |secs: u32| {
+            l.bar.x + (i64::from(secs) * i64::from(l.bar.w) / i64::from(duration)) as i32
+        };
+        let y = l.bar.y + l.bar.h / 2;
+
+        mouse(hwnd, WM_LBUTTONDOWN, at(before.start), y);
+        mouse(hwnd, WM_MOUSEMOVE, at(before.start - 5 * 60), y);
+        assert_eq!(store.borrow().revision(), 0, "not saved while dragging");
+        mouse(hwnd, WM_LBUTTONUP, at(before.start - 5 * 60), y);
+
+        let after = store.borrow().schedule().classes(Weekday::Mon)[0]
+            .brk
+            .unwrap();
+        assert!(after.start < before.start, "{before:?} -> {after:?}");
+        assert_eq!(after.end(), before.end());
+        assert_eq!(store.borrow().revision(), 1);
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_longest_day_name_fits_its_column() {
+        let mut canvas = Canvas::new(160, 70);
+        let area = Rect::new(20, 0, 120, 70);
+        draw_text(
+            &mut canvas,
+            "Wednesday",
+            area,
+            Rgba::rgb(255, 255, 255),
+            Align::Center,
+        );
+        let ink = |x: u32| (0..70).any(|y| canvas.pixel(x, y) != 0);
+        assert!((20..140).any(ink), "it is drawn");
+        assert!(
+            !ink(20) && !ink(139),
+            "and not cut off at the edges of its area"
+        );
+    }
+
+    #[test]
+    fn leaving_the_class_ends_the_add_break_mode_for_good() {
+        use windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP;
+        let dir = Scratch::new("mode-ends", MONDAY);
+        let store = dir.store();
+        let hwnd = open(store.clone()).unwrap();
+        let l = select_monday(hwnd);
+        mouse(hwnd, WM_LBUTTONDOWN, l.add.x + 3, l.add.y + 3);
+        mouse(hwnd, WM_LBUTTONUP, l.add.x + 3, l.add.y + 3);
+        // SAFETY: on the window's thread.
+        unsafe { assert!(state_of(hwnd).unwrap().detail.is_adding()) };
+
+        // Click on empty space in the week, then on the class again.
+        mouse(hwnd, WM_LBUTTONDOWN, 5, l.area.y - 20);
+        mouse(hwnd, WM_LBUTTONUP, 5, l.area.y - 20);
+        let ((x, y), _) = class_and_plus(hwnd);
+        mouse(hwnd, WM_LBUTTONDOWN, x, y);
+        mouse(hwnd, WM_LBUTTONUP, x, y);
+        // SAFETY: as above.
+        unsafe {
+            let state = state_of(hwnd).unwrap();
+            assert!(state.timetable.selected(&store.borrow()).is_some());
+            assert!(!state.detail.is_adding());
+        }
         close(hwnd);
     }
 }

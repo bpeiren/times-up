@@ -19,6 +19,13 @@ impl RectF {
     }
 }
 
+/// How text sits in the area it is drawn in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+}
+
 pub struct Canvas {
     width: u32,
     height: u32,
@@ -115,6 +122,21 @@ impl Canvas {
                 if m > 0 && cx >= 0 && cy >= 0 {
                     self.blend(cx as u32, cy as u32, color, f32::from(m) / 255.0);
                 }
+            }
+        }
+    }
+
+    /// Source-over all of `src` with its top-left corner at `(x, y)`; whatever falls outside this
+    /// canvas is dropped.
+    pub fn composite(&mut self, src: &Canvas, x: i32, y: i32) {
+        for sy in 0..src.height {
+            for sx in 0..src.width {
+                let (cx, cy) = (x + sx as i32, y + sy as i32);
+                if cx < 0 || cy < 0 || cx >= self.width as i32 || cy >= self.height as i32 {
+                    continue;
+                }
+                let dst = &mut self.px[(cy as u32 * self.width + cx as u32) as usize];
+                *dst = over(*dst, src.px[(sy * src.width + sx) as usize]);
             }
         }
     }

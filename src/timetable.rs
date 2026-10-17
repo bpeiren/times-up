@@ -5,7 +5,7 @@
 //!
 //! A drag changes a preview only; the day is saved through the store when the button is released.
 
-use crate::canvas::{Canvas, RectF};
+use crate::canvas::{Align, Canvas, RectF};
 use crate::config::{Colors, Rgba};
 use crate::interaction::{CursorShape, Rect};
 use crate::schedule::{Class, MINUTE, Secs, Weekday, format_clock, hm};
@@ -24,7 +24,7 @@ const NEW_GAP: Secs = 10 * MINUTE;
 const FIRST_START: Secs = hm(8, 30);
 
 // Logical sizes at 96 DPI.
-const LABEL_W: f32 = 96.0;
+const LABEL_W: f32 = 120.0;
 const HOURS_H: f32 = 26.0;
 const FOOTER_H: f32 = 52.0;
 const SIDE: f32 = 12.0;
@@ -218,14 +218,6 @@ pub enum Target {
     },
 }
 
-/// The days of the week as shown: Monday to Friday always, the weekend when it has classes.
-pub fn shown_days<'a>(classes_of: impl Fn(Weekday) -> &'a [Class]) -> Vec<Weekday> {
-    Weekday::ALL
-        .into_iter()
-        .filter(|&d| d.index() < 5 || !classes_of(d).is_empty())
-        .collect()
-}
-
 // ---- adding, and the shape of a dragged class ----
 
 /// Start and end of the class the plus button adds: 50 minutes, 10 minutes after the last class
@@ -316,7 +308,7 @@ impl Timetable {
 
     /// The days shown and the axis they share (fixed while a class is being dragged).
     pub fn days_and_axis(&self, store: &Store) -> (Vec<Weekday>, Axis) {
-        let days = shown_days(|d| self.classes(store, d));
+        let days = Weekday::ALL.to_vec();
         let axis = self.drag.as_ref().map_or_else(
             || Axis::fitted(days.iter().flat_map(|&d| self.classes(store, d))),
             |d| d.axis,
@@ -537,7 +529,7 @@ impl Timetable {
         canvas: &mut Canvas,
         store: &Store,
         layout: &Layout,
-        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba),
+        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba, Align),
     ) {
         let colors = store.config().colors;
         self.paint_axis(canvas, layout, &colors, text);
@@ -545,7 +537,13 @@ impl Timetable {
         for (row, &day) in layout.days.iter().enumerate() {
             let r = layout.rows[row];
             let name = Rect::new(r.x, r.y, layout.track.x - r.x, r.h);
-            text(canvas, strings::DAY_NAMES[day.index()], name, colors.text);
+            text(
+                canvas,
+                strings::DAY_NAMES[day.index()],
+                name,
+                colors.text,
+                Align::Center,
+            );
             fill(canvas, layout.class_track(row), colors.track, 0.0);
             for (index, class) in self.classes(store, day).iter().enumerate() {
                 let rect = layout.class_rect(row, class);
@@ -558,7 +556,13 @@ impl Timetable {
             let can_add = self.can_add(store, day);
             let plus = layout.plus[row];
             fill(canvas, plus, BUTTON, 6.0);
-            text(canvas, "+", plus, if can_add { colors.text } else { DIM });
+            text(
+                canvas,
+                "+",
+                plus,
+                if can_add { colors.text } else { DIM },
+                Align::Center,
+            );
         }
         let remove_color = if selected.is_some() { colors.text } else { DIM };
         fill(canvas, layout.remove, BUTTON, 6.0);
@@ -567,6 +571,7 @@ impl Timetable {
             strings::BUTTON_REMOVE_CLASS,
             layout.remove,
             remove_color,
+            Align::Center,
         );
         if let Some(error) = &self.error {
             let area = Rect::new(
@@ -575,7 +580,7 @@ impl Timetable {
                 layout.remove.x - layout.hours.x,
                 layout.remove.h,
             );
-            text(canvas, error, area, ERROR);
+            text(canvas, error, area, ERROR, Align::Center);
         }
         self.paint_drag_label(canvas, store, layout, &colors, text);
     }
@@ -585,7 +590,7 @@ impl Timetable {
         canvas: &mut Canvas,
         layout: &Layout,
         colors: &Colors,
-        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba),
+        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba, Align),
     ) {
         let bottom = layout.track.bottom();
         let label_w = layout.hours.h * 3;
@@ -598,7 +603,13 @@ impl Timetable {
                 0.0,
             );
             let area = Rect::new(x - label_w / 2, layout.hours.y, label_w, layout.hours.h);
-            text(canvas, &format_clock(hour * 3600), area, colors.text);
+            text(
+                canvas,
+                &format_clock(hour * 3600),
+                area,
+                colors.text,
+                Align::Center,
+            );
         }
     }
 
@@ -608,7 +619,7 @@ impl Timetable {
         store: &Store,
         layout: &Layout,
         colors: &Colors,
-        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba),
+        text: &mut dyn FnMut(&mut Canvas, &str, Rect, Rgba, Align),
     ) {
         let (Some(drag), Some(_)) = (&self.drag, &self.preview) else {
             return;
@@ -632,7 +643,7 @@ impl Timetable {
             },
             5.0,
         );
-        text(canvas, &label, area, colors.text);
+        text(canvas, &label, area, colors.text, Align::Center);
     }
 }
 
@@ -834,19 +845,11 @@ mod tests {
     // ---- geometry ----
 
     #[test]
-    fn weekend_rows_only_show_when_they_have_classes() {
-        let sat = [class(hm(9, 0), hm(9, 50))];
-        let none: [Class; 0] = [];
-        let days = shown_days(|d| {
-            if d == Weekday::Sat {
-                &sat[..]
-            } else {
-                &none[..]
-            }
-        });
-        assert_eq!(days.len(), 6);
-        assert_eq!(days[5], Weekday::Sat);
-        assert_eq!(shown_days(|_| &none[..]).len(), 5);
+    fn all_seven_days_have_a_row() {
+        let dir = Scratch::new("days", "");
+        let store = dir.store();
+        let (days, _) = Timetable::default().days_and_axis(&store);
+        assert_eq!(days, Weekday::ALL.to_vec());
     }
 
     #[test]
@@ -962,7 +965,7 @@ mod tests {
         );
         let l = lay(&view, &store);
         let (days, _) = view.days_and_axis(&store);
-        assert_eq!(days.len(), 5);
+        assert_eq!(days.len(), 7);
         let preview = &view.classes(&store, MON)[0];
         assert_eq!(preview.start % SNAP, 0);
         assert_eq!(preview.duration(), 50 * 60);
@@ -1301,7 +1304,7 @@ mod tests {
         let mut canvas = Canvas::new(860, 520);
         let mut drawn: Vec<String> = Vec::new();
         let l = lay(&view, &store);
-        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _| {
+        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _, _| {
             drawn.push(t.to_string())
         });
         for expected in [
@@ -1317,7 +1320,7 @@ mod tests {
                 "{expected} in {drawn:?}"
             );
         }
-        assert!(!drawn.iter().any(|t| t == "Saturday"));
+        assert!(drawn.iter().any(|t| t == "Wednesday" || t == "Sunday"));
         let green = store.config().colors.green;
         let argb = |c: Rgba| u32::from_be_bytes([c.a, c.r, c.g, c.b]);
         assert_eq!(canvas.pixel(x as u32, y as u32), argb(green));
@@ -1329,7 +1332,7 @@ mod tests {
         let l = lay(&view, &store);
         let mut canvas = Canvas::new(860, 520);
         let mut drawn = Vec::new();
-        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _| {
+        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _, _| {
             drawn.push(t.to_string())
         });
         let text = store.config().colors.text;
@@ -1346,7 +1349,7 @@ mod tests {
         drag_at(&mut view, &store, x + 60);
         let l = lay(&view, &store);
         let mut drawn = Vec::new();
-        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _| {
+        view.paint(&mut canvas, &store, &l, &mut |_, t, _, _, _| {
             drawn.push(t.to_string())
         });
         let label = view.classes(&store, MON)[0].clone();

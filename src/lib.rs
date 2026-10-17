@@ -5,6 +5,7 @@
 pub mod bar;
 pub mod canvas;
 pub mod config;
+pub mod detail;
 pub mod editing;
 pub mod icon;
 pub mod interaction;

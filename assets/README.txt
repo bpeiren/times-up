@@ -27,7 +27,8 @@ The bar
 - Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
     Settings...                     opens the Settings window: the week, with classes you can
-                                    drag, resize, add (+) and remove (Delete)
+                                    drag, resize, add (+) and remove (Delete),
+                                    and the break and warning times of the selected class
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit
