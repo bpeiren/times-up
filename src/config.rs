@@ -133,6 +133,10 @@ pub enum ConfigError {
     Parse(String),
     /// The class to update is not in the file (e.g. it was edited meanwhile).
     ClassNotFound,
+    /// The edit would produce a timetable that is not valid; nothing was written.
+    Invalid(String),
+    /// There is no file to write to (it could not be created at startup).
+    NoFile,
 }
 
 impl fmt::Display for ConfigError {
@@ -141,6 +145,8 @@ impl fmt::Display for ConfigError {
             Self::Io(e) => write!(f, "cannot write {FILE_NAME}: {e}"),
             Self::Parse(e) => write!(f, "{FILE_NAME} is not valid TOML: {e}"),
             Self::ClassNotFound => write!(f, "that class is not in {FILE_NAME} (any more)"),
+            Self::Invalid(e) => write!(f, "{e}"),
+            Self::NoFile => write!(f, "there is no settings file to save to"),
         }
     }
 }
@@ -493,6 +499,67 @@ fn set_class(doc: &mut DocumentMut, day: Weekday, class: &Class) -> Result<(), C
     Ok(())
 }
 
+/// `32400` -> `"09:00"`; the end of the day is `"24:00"`.
+fn format_time(secs: Secs) -> String {
+    let minutes = secs.div_ceil(MINUTE);
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+/// One class as a one-line inline table. The break and the thresholds are only written when they
+/// differ from what the file's defaults would give, so the file stays as short as it was.
+fn class_value(class: &Class, default_break: Secs, defaults: Warnings) -> Value {
+    let mut t = toml_edit::InlineTable::new();
+    t.insert("start", format_time(class.start).into());
+    t.insert("end", format_time(class.end).into());
+    let standard = Class::new(class.start, class.end, default_break).ok();
+    if standard.as_ref().map(|c| c.brk) != Some(class.brk) {
+        let (start, len) = class.brk.map_or((None, 0), |b| (Some(b.start), b.len));
+        if let Some(s) = start {
+            t.insert("break_start", minutes_value(s));
+        }
+        t.insert("break_len", minutes_value(len));
+    }
+    let [w1, w2] = class.warnings;
+    if w1 != defaults || w2 != defaults {
+        t.insert("orange", pair_value(w1.orange, w2.orange));
+        t.insert("red", pair_value(w1.red, w2.red));
+    }
+    Value::InlineTable(t)
+}
+
+/// Replace the `classes` array of `day` by `classes`, one class per line.
+fn set_day(
+    doc: &mut DocumentMut,
+    day: Weekday,
+    classes: &[Class],
+    default_break: Secs,
+    defaults: Warnings,
+) {
+    let name = DAYS[day.index()].0;
+    let mut array = toml_edit::Array::new();
+    for class in classes {
+        let mut v = class_value(class, default_break, defaults);
+        v.decor_mut().set_prefix(
+            "
+  ",
+        );
+        array.push_formatted(v);
+    }
+    array.set_trailing(
+        "
+",
+    );
+    array.set_trailing_comma(!classes.is_empty());
+
+    let section = doc.entry(name).or_insert_with(|| Item::Table(Table::new()));
+    if section.as_table_like().is_none() {
+        *section = Item::Table(Table::new());
+    }
+    if let Some(t) = section.as_table_like_mut() {
+        t.insert("classes", Item::Value(Value::Array(array)));
+    }
+}
+
 // ---- the file on disk ----
 
 /// Where the config lives: `times-up.toml` next to the running exe.
@@ -571,6 +638,21 @@ impl ConfigFile {
     /// same start and end), leaving the rest of the file as it was.
     pub fn save_class(&mut self, day: Weekday, class: &Class) -> Result<(), ConfigError> {
         self.edit(|doc| set_class(doc, day, class))
+    }
+
+    /// Rewrite the classes of `day` (one per line) and nothing else in the file. `default_break`
+    /// and `defaults` are the file's defaults, so only deviations from them are written.
+    pub fn save_day(
+        &mut self,
+        day: Weekday,
+        classes: &[Class],
+        default_break: Secs,
+        defaults: Warnings,
+    ) -> Result<(), ConfigError> {
+        self.edit(|doc| {
+            set_day(doc, day, classes, default_break, defaults);
+            Ok(())
+        })
     }
 
     fn stat(&self) -> Option<(SystemTime, u64)> {
