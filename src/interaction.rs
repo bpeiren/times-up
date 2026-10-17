@@ -57,6 +57,8 @@ pub enum Hit {
 pub enum CursorShape {
     Arrow,
     SizeWestEast,
+    /// Move in any direction.
+    SizeAll,
     SizeNorthSouth,
     SizeNorthwestSoutheast,
     SizeNortheastSouthwest,

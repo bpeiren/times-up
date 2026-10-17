@@ -39,6 +39,16 @@ pub enum Weekday {
 }
 
 impl Weekday {
+    pub const ALL: [Weekday; 7] = [
+        Weekday::Mon,
+        Weekday::Tue,
+        Weekday::Wed,
+        Weekday::Thu,
+        Weekday::Fri,
+        Weekday::Sat,
+        Weekday::Sun,
+    ];
+
     pub const fn index(self) -> usize {
         self as usize
     }

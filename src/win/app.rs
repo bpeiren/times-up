@@ -135,6 +135,8 @@ impl App {
                 .borrow_mut()
                 .schedule_mut()
                 .class_mut(edited.day, edited.index)
+            // The Settings window may have moved or removed classes meanwhile.
+            && (class.start, class.end) == (edited.original.start, edited.original.end)
         {
             *class = edited.original;
         }

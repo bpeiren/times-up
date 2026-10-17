@@ -551,10 +551,12 @@ fn set_day(
         );
         array.push_formatted(v);
     }
-    array.set_trailing(
-        "
+    if !classes.is_empty() {
+        array.set_trailing(
+            "
 ",
-    );
+        );
+    }
     array.set_trailing_comma(!classes.is_empty());
 
     let section = doc.entry(name).or_insert_with(|| Item::Table(Table::new()));

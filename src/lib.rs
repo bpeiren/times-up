@@ -12,4 +12,5 @@ pub mod schedule;
 pub mod settings;
 pub mod store;
 pub mod strings;
+pub mod timetable;
 pub mod win;

@@ -9,3 +9,15 @@ pub const LABEL_QUIT: &str = "Quit";
 
 pub const SETTINGS_TITLE: &str = "Time's up - Settings";
 pub const SECTION_TIMETABLE: &str = "Timetable";
+
+/// Indexed by `Weekday::index`.
+pub const DAY_NAMES: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+pub const BUTTON_REMOVE_CLASS: &str = "Remove class";
