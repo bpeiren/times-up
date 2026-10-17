@@ -29,8 +29,11 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   right-click and choose *Save as default for this slot*.
 - Right-click the bar or click the tray icon: *Save as default for this slot*, *Settings...*,
   *Start with Windows*, *Quit*. *Settings...* opens a window of its own (one at a time, resizable;
-  its place and size are remembered). Until it has more to offer, edit `times-up.toml` in any text
-  editor.
+  its place and size are remembered). It shows the week: click a class to select it, drag it to
+  move it or drag its edges to resize it (5 minute steps, never over a neighbour), use the *+*
+  button of a day to add a class, and *Remove class* or the Delete key to remove the selected one.
+  Changes are saved to `times-up.toml` when you let go of the mouse. Breaks and warning times are
+  still edited on the bar or in the file.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be

@@ -26,8 +26,8 @@ The bar
   change is forgotten when the class is over.
 - Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
-    Settings...                     opens the Settings window (more to come: for now, edit
-                                    times-up.toml in a text editor)
+    Settings...                     opens the Settings window: the week, with classes you can
+                                    drag, resize, add (+) and remove (Delete)
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit
