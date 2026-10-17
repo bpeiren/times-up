@@ -296,6 +296,8 @@ pub struct Timetable {
     preview: Option<Preview>,
     /// Why the last save failed, shown until the next change.
     error: Option<String>,
+    /// A save changed the running class that has temporary changes on the bar.
+    live_touched: bool,
 }
 
 impl Timetable {
@@ -318,6 +320,12 @@ impl Timetable {
 
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// Whether a save touched the running class that has temporary changes on the bar since the
+    /// last time this was asked.
+    pub fn take_live_touched(&mut self) -> bool {
+        std::mem::take(&mut self.live_touched)
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -481,7 +489,10 @@ impl Timetable {
 
     fn save(&mut self, store: &mut Store, day: Weekday, classes: Vec<Class>) {
         match store.set_day(day, classes) {
-            Ok(()) => self.error = None,
+            Ok(touched_live) => {
+                self.error = None;
+                self.live_touched |= touched_live;
+            }
             Err(e) => self.error = Some(e.to_string()),
         }
     }
