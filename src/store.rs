@@ -1,16 +1,37 @@
 //! The single source of truth for the timetable and settings: file <-> `Store` <-> views.
 //!
-//! The live bar (and later the Settings window) read the [`Config`] from here. The file poll and
-//! every edit go through the store, and each change that is applied bumps the revision, so a view
-//! only has to compare revisions to know that it must redraw. Plain Rust without Win32.
+//! The live bar and the Settings window read the [`Config`] from here. The file poll and every
+//! edit go through the store, and each change that is applied bumps the revision, so a view only
+//! has to compare revisions to know that it must redraw. Plain Rust without Win32.
+//!
+//! The schedule held here is the saved one, what the file says. The teacher can change the class
+//! that is running on the bar itself; that temporary change is kept apart as the [`Live`] class
+//! and only the bar looks at it ([`Store::live_schedule`]). So an edit of the saved timetable
+//! can never write a temporary change into the file by accident.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use crate::config::{Config, ConfigError, ConfigFile, WindowRect};
 use crate::schedule::{Class, Schedule, Weekday};
 
+/// A temporary version of a class that is running, changed on the bar and not saved. It belongs
+/// to the saved class with the same day, start and end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Live {
+    pub day: Weekday,
+    pub class: Class,
+}
+
+impl Live {
+    fn is_version_of(&self, day: Weekday, class: &Class) -> bool {
+        self.day == day && (self.class.start, self.class.end) == (class.start, class.end)
+    }
+}
+
 pub struct Store {
     config: Config,
+    live: Option<Live>,
     /// Where the config came from; `None` when there is no file to read or write.
     file: Option<ConfigFile>,
     revision: u64,
@@ -20,6 +41,7 @@ impl Store {
     pub fn new(config: Config, file: Option<ConfigFile>) -> Self {
         Self {
             config,
+            live: None,
             file,
             revision: 0,
         }
@@ -47,10 +69,55 @@ impl Store {
         self.file.as_ref().map(ConfigFile::path)
     }
 
-    /// Mutable access for changes that live only on the bar and are never saved (the teacher
-    /// stretching the running class). They are not edits, so the revision stays as it is.
-    pub fn schedule_mut(&mut self) -> &mut Schedule {
-        &mut self.config.schedule
+    pub fn live(&self) -> Option<&Live> {
+        self.live.as_ref()
+    }
+
+    /// The saved class that `live` is a temporary version of; `None` when there is no such class
+    /// any more (the file changed), in which case the live version does not apply.
+    pub fn live_base(&self) -> Option<(usize, &Class)> {
+        let live = self.live.as_ref()?;
+        self.config
+            .schedule
+            .classes(live.day)
+            .iter()
+            .enumerate()
+            .find(|(_, c)| live.is_version_of(live.day, c))
+    }
+
+    /// Change the running class on the bar only. The class must keep the start and end of the
+    /// saved one. Not an edit of the timetable, so the revision stays as it is.
+    pub fn set_live(&mut self, day: Weekday, class: Class) {
+        self.live = Some(Live { day, class });
+    }
+
+    /// Forget the temporary changes: the bar shows the saved class again.
+    pub fn clear_live(&mut self) {
+        self.live = None;
+    }
+
+    /// The schedule as the bar shows it: the saved one with the temporary version of the running
+    /// class in place of the saved version.
+    pub fn live_schedule(&self) -> Cow<'_, Schedule> {
+        let (Some(live), Some((index, _))) = (self.live.as_ref(), self.live_base()) else {
+            return Cow::Borrowed(&self.config.schedule);
+        };
+        let mut schedule = self.config.schedule.clone();
+        if let Some(class) = schedule.class_mut(live.day, index) {
+            *class = live.class.clone();
+        }
+        Cow::Owned(schedule)
+    }
+
+    /// Make the temporary version the saved one in memory (after it was written to the file as
+    /// the default of its slot).
+    pub fn commit_live(&mut self) {
+        let index = self.live_base().map(|(index, _)| index);
+        if let (Some(live), Some(index)) = (self.live.take(), index)
+            && let Some(class) = self.config.schedule.class_mut(live.day, index)
+        {
+            *class = live.class;
+        }
     }
 
     /// Take over what the file says when it changed since it was last read or written by us.
@@ -60,6 +127,8 @@ impl Store {
             return false;
         };
         self.config = loaded.config;
+        // The file is the truth: changes made on the bar and not saved are dropped.
+        self.live = None;
         self.revision += 1;
         true
     }
@@ -67,7 +136,13 @@ impl Store {
     /// Replace the classes of `day`. They are validated first, then only that day's `classes`
     /// array is rewritten in the file, starting from the file as it is now. Nothing changes when
     /// the classes are invalid or the file cannot be written.
-    pub fn set_day(&mut self, day: Weekday, classes: Vec<Class>) -> Result<(), ConfigError> {
+    ///
+    /// Returns whether the edit changed the settings (break, warning times) of the saved class
+    /// that has temporary changes on the bar. Those temporary changes are left as they are for
+    /// the caller to decide about. A class that was moved, resized or removed is no longer the
+    /// class they were made to: they stop applying and the bar drops them.
+    pub fn set_day(&mut self, day: Weekday, classes: Vec<Class>) -> Result<bool, ConfigError> {
+        let before = self.live_base().map(|(_, c)| c.clone());
         let mut schedule = self.config.schedule.clone();
         schedule
             .set_day(day, classes)
@@ -81,7 +156,8 @@ impl Store {
         )?;
         self.config.schedule = schedule;
         self.revision += 1;
-        Ok(())
+        let after = self.live_base().map(|(_, c)| c);
+        Ok(before.is_some() && after.is_some() && before.as_ref() != after)
     }
 
     /// Store the break and thresholds of a class as its defaults in the file.
@@ -277,7 +353,9 @@ mod tests {
     fn live_changes_and_window_moves_do_not_bump_the_revision() {
         let dir = Scratch::new("live", SAMPLE);
         let mut store = dir.store();
-        store.schedule_mut().class_mut(Weekday::Mon, 0).unwrap().end += MINUTE;
+        let mut live = store.schedule().classes(Weekday::Mon)[0].clone();
+        live.brk = None;
+        store.set_live(Weekday::Mon, live);
         let rect = WindowRect {
             x: Some(5),
             y: Some(6),
@@ -287,6 +365,104 @@ mod tests {
         store.save_window(rect).unwrap();
         assert_eq!(store.revision(), 0);
         assert_eq!(store.config().window, rect);
+    }
+
+    /// 09:00-10:40 on Monday, with its default break, and a live version without the break.
+    fn with_live(name: &str) -> (Scratch, Store, Class) {
+        let dir = Scratch::new(name, SAMPLE);
+        let mut store = dir.store();
+        let mut live = store.schedule().classes(Weekday::Mon)[0].clone();
+        assert!(live.brk.is_some());
+        live.brk = None;
+        store.set_live(Weekday::Mon, live.clone());
+        (dir, store, live)
+    }
+
+    #[test]
+    fn the_bar_sees_the_live_class_and_the_saved_schedule_does_not() {
+        let (_dir, store, live) = with_live("live-view");
+        assert_eq!(store.live_schedule().classes(Weekday::Mon)[0], live);
+        assert!(store.schedule().classes(Weekday::Mon)[0].brk.is_some());
+        assert_eq!(store.live_base().map(|(i, _)| i), Some(0));
+        assert_eq!(store.live().map(|l| l.day), Some(Weekday::Mon));
+    }
+
+    #[test]
+    fn clearing_the_live_class_shows_the_saved_one_again() {
+        let (_dir, mut store, _) = with_live("live-clear");
+        store.clear_live();
+        assert!(store.live().is_none());
+        assert_eq!(
+            store.live_schedule().classes(Weekday::Mon),
+            store.schedule().classes(Weekday::Mon)
+        );
+    }
+
+    #[test]
+    fn committing_the_live_class_makes_it_the_saved_one_in_memory() {
+        let (_dir, mut store, live) = with_live("live-commit");
+        store.commit_live();
+        assert!(store.live().is_none());
+        assert_eq!(store.schedule().classes(Weekday::Mon)[0], live);
+    }
+
+    #[test]
+    fn an_external_edit_drops_the_live_class() {
+        let (dir, mut store, _) = with_live("live-external");
+        fs::write(dir.file(), SAMPLE.replace("# my schedule", "# changed")).unwrap();
+        assert!(store.poll());
+        assert!(store.live().is_none());
+    }
+
+    #[test]
+    fn saving_another_class_never_writes_the_live_changes_to_the_file() {
+        let (dir, mut store, live) = with_live("live-other");
+        let mut classes = store.schedule().classes(Weekday::Mon).to_vec();
+        classes.push(class((11, 0), (11, 50)));
+        let touched = store.set_day(Weekday::Mon, classes).unwrap();
+        assert!(!touched, "the running class was not edited");
+        let saved = crate::config::parse(&dir.text()).config;
+        assert!(saved.schedule.classes(Weekday::Mon)[0].brk.is_some());
+        // The bar still shows the live version.
+        assert_eq!(store.live_schedule().classes(Weekday::Mon)[0], live);
+        assert_eq!(store.live_schedule().classes(Weekday::Mon).len(), 2);
+    }
+
+    #[test]
+    fn editing_the_running_class_is_reported_and_leaves_the_live_class_alone() {
+        let (_dir, mut store, live) = with_live("live-touched");
+        let mut changed = store.schedule().classes(Weekday::Mon)[0].clone();
+        changed.warnings[0] = crate::schedule::Warnings::new(7 * MINUTE, 2 * MINUTE).unwrap();
+        assert!(store.set_day(Weekday::Mon, vec![changed.clone()]).unwrap());
+        assert_eq!(
+            store.live().map(|l| &l.class),
+            Some(&live),
+            "left for the caller"
+        );
+        assert_eq!(store.live_schedule().classes(Weekday::Mon)[0], live);
+        assert_eq!(store.schedule().classes(Weekday::Mon)[0], changed);
+    }
+
+    #[test]
+    fn moving_or_removing_the_running_class_is_no_conflict_and_the_live_class_stops_applying() {
+        let (_dir, mut store, _) = with_live("live-moved");
+        let moved = class((9, 5), (10, 45));
+        assert!(!store.set_day(Weekday::Mon, vec![moved.clone()]).unwrap());
+        assert_eq!(store.live_base(), None);
+        assert_eq!(store.live_schedule().classes(Weekday::Mon), [moved]);
+
+        let (_dir, mut store, _) = with_live("live-removed");
+        assert!(!store.set_day(Weekday::Mon, Vec::new()).unwrap());
+        assert!(store.live_schedule().classes(Weekday::Mon).is_empty());
+    }
+
+    #[test]
+    fn an_edit_of_another_day_is_not_a_conflict() {
+        let (_dir, mut store, _) = with_live("live-day");
+        let touched = store
+            .set_day(Weekday::Tue, vec![class((9, 0), (9, 50))])
+            .unwrap();
+        assert!(!touched);
     }
 
     #[test]

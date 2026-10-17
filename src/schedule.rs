@@ -317,6 +317,17 @@ impl Schedule {
         self.days[day.index()].get_mut(index)
     }
 
+    /// The class the bar is about at `now` (counting from the lead-in until it has just ended).
+    pub fn current_class(&self, day: Weekday, now: Secs) -> Option<usize> {
+        match self.state(day, now) {
+            State::LeadIn { class, .. }
+            | State::Running { class, .. }
+            | State::Break { class, .. }
+            | State::Ended { class } => Some(class),
+            State::Idle { .. } => None,
+        }
+    }
+
     /// The state at `now` (seconds since midnight) on `day`.
     ///
     /// Priority: a running class or break, then a class that just ended, then the lead-in of the

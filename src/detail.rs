@@ -204,6 +204,8 @@ pub struct Detail {
     adding: Option<Key>,
     pointer: Option<(i32, i32)>,
     error: Option<String>,
+    /// A save changed the running class that has temporary changes on the bar.
+    live_touched: bool,
 }
 
 type Selected<'a> = Option<(Weekday, usize, &'a Class)>;
@@ -218,6 +220,12 @@ pub fn selected_class(store: &Store, selection: Option<(Weekday, usize)>) -> Sel
 impl Detail {
     pub fn is_dragging(&self) -> bool {
         self.grab.is_some()
+    }
+
+    /// Whether a save touched the running class that has temporary changes on the bar since the
+    /// last time this was asked.
+    pub fn take_live_touched(&mut self) -> bool {
+        std::mem::take(&mut self.live_touched)
     }
 
     /// Whether the Add break mode is on.
@@ -391,7 +399,13 @@ impl Detail {
     fn save(&mut self, store: &mut Store, day: Weekday, index: usize, class: Class) {
         let mut classes = store.schedule().classes(day).to_vec();
         classes[index] = class;
-        self.error = store.set_day(day, classes).err().map(|e| e.to_string());
+        match store.set_day(day, classes) {
+            Ok(touched_live) => {
+                self.error = None;
+                self.live_touched |= touched_live;
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
     }
 
     /// Paint the detail bar. `text` draws a string in an area with an alignment and a colour.

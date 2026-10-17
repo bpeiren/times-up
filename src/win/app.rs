@@ -18,7 +18,7 @@ use crate::canvas::Canvas;
 use crate::config::{self, Config, ConfigError, ConfigFile, WindowRect};
 use crate::editing::{self, Handle};
 use crate::interaction::{CursorShape, Rect, default_rect, fit_on_screen};
-use crate::schedule::{Class, Secs, State, Weekday};
+use crate::schedule::{Class, Secs, Weekday};
 use crate::store::Store;
 
 /// Aim this many milliseconds past a second boundary so the clock has surely ticked over.
@@ -59,15 +59,6 @@ impl Services {
     }
 }
 
-/// A class the teacher changed on the bar, with the version to go back to. The change lives only
-/// in memory: it is undone when another class (or none) becomes current, and it is lost on
-/// restart, unless it is saved as the default.
-struct Edited {
-    day: Weekday,
-    index: usize,
-    original: Class,
-}
-
 /// A handle being dragged.
 struct Grab {
     handle: Handle,
@@ -85,7 +76,6 @@ struct App {
     /// Milliseconds past the second at the last tick, used to time the next one.
     last_ms: u32,
     services: Services,
-    edited: Option<Edited>,
     grab: Option<Grab>,
 }
 
@@ -99,66 +89,41 @@ impl App {
             store: Rc::new(RefCell::new(Store::new(config, file))),
             last_ms: 0,
             services,
-            edited: None,
             grab: None,
         }
     }
 
     /// The class the bar is showing at `now` (counting from the lead-in until it has just ended).
     fn current_class(&self, day: Weekday, now: Secs) -> Option<usize> {
-        match self.store.borrow().schedule().state(day, now) {
-            State::LeadIn { class, .. }
-            | State::Running { class, .. }
-            | State::Break { class, .. }
-            | State::Ended { class } => Some(class),
-            State::Idle { .. } => None,
-        }
+        self.store.borrow().schedule().current_class(day, now)
     }
 
-    /// Undo the teacher's changes to a class once it is no longer the current one.
+    /// Drop the teacher's changes to a class once it is no longer the current one (or no longer
+    /// the class they were made to, because the Settings window changed it).
     fn revert_stale(&mut self, day: Weekday, now: Secs) {
-        let stale = self
-            .edited
-            .as_ref()
-            .is_some_and(|e| e.day != day || self.current_class(day, now) != Some(e.index));
+        let stale = {
+            let store = self.store.borrow();
+            store.live().is_some_and(|live| {
+                let index = store.live_base().map(|(index, _)| index);
+                live.day != day || index.is_none() || index != self.current_class(day, now)
+            })
+        };
         if stale {
-            self.undo_edit();
+            self.store.borrow_mut().clear_live();
             self.grab = None;
         }
     }
 
-    /// Put the edited class back as it was.
-    fn undo_edit(&mut self) {
-        if let Some(edited) = self.edited.take()
-            && let Some(class) = self
-                .store
-                .borrow_mut()
-                .schedule_mut()
-                .class_mut(edited.day, edited.index)
-            // The Settings window may have moved or removed classes meanwhile.
-            && (class.start, class.end) == (edited.original.start, edited.original.end)
-        {
-            *class = edited.original;
-        }
-    }
-
-    /// Store the break and thresholds of the edited class in the config file as its defaults.
-    /// Returns an error text when that is not possible; the edit stays as it was then.
+    /// Store the break and thresholds of the changed class in the config file as its defaults.
+    /// Returns an error text when that is not possible; the change stays as it was then.
     fn save_default(&mut self) -> Option<String> {
-        let edited = self.edited.as_ref()?;
-        let (day, index) = (edited.day, edited.index);
-        let class = self
-            .store
-            .borrow()
-            .schedule()
-            .classes(day)
-            .get(index)?
-            .clone();
-        match self.store.borrow_mut().save_class(day, &class) {
+        let live = self.store.borrow().live()?.clone();
+        let saved = self.store.borrow_mut().save_class(live.day, &live.class);
+        match saved {
             Err(ConfigError::NoFile) => Some("There is no settings file to save to.".to_string()),
             Ok(()) => {
                 // What is on the bar is now what the file says; nothing left to undo.
-                self.edited = None;
+                self.store.borrow_mut().commit_live();
                 None
             }
             Err(e) => Some(format!("Could not save the defaults: {e}")),
@@ -180,7 +145,8 @@ impl App {
     ) -> Option<(usize, Handle)> {
         let index = self.current_class(day, now)?;
         let store = self.store.borrow();
-        let class = store.schedule().classes(day).get(index)?;
+        let schedule = store.live_schedule();
+        let class = schedule.classes(day).get(index)?;
         let handle = editing::handle_at(class, x as f32, w as f32, Self::handle_grip(h))?;
         Some((index, handle))
     }
@@ -190,7 +156,7 @@ impl App {
         let Some((index, handle)) = self.handle_under(day, now, x, w, h) else {
             return false;
         };
-        let start = self.store.borrow().schedule().classes(day)[index].clone();
+        let start = self.store.borrow().live_schedule().classes(day)[index].clone();
         self.grab = Some(Grab {
             handle,
             start,
@@ -202,7 +168,8 @@ impl App {
     }
 
     /// The handle follows the pointer, `dx` pixels from where it was picked up. The class is
-    /// changed in the schedule right away, so the bar shows it on the next paint.
+    /// changed on the bar right away (not in the saved timetable), so the bar shows it on the
+    /// next paint.
     fn move_grab(&mut self, dx: i32) {
         let Some(grab) = &self.grab else {
             return;
@@ -210,39 +177,30 @@ impl App {
         let width = f64::from(grab.width.max(1));
         let seconds = (f64::from(dx) / width * f64::from(grab.start.duration())).round() as i64;
         let changed = editing::drag(&grab.start, grab.handle, seconds);
-        let (day, index, start) = (grab.day, grab.index, grab.start.clone());
+        let (day, start) = (grab.day, grab.start.clone());
 
-        // An edit of some other class cannot be kept alongside this one.
-        if self
-            .edited
-            .as_ref()
-            .is_some_and(|e| e.day != day || e.index != index)
-        {
-            self.undo_edit();
-        }
-        // Remember the first version of the class, however many drags it takes.
-        if self.edited.is_none() && changed != start {
-            self.edited = Some(Edited {
-                day,
-                index,
-                original: start,
-            });
-        }
         let mut store = self.store.borrow_mut();
-        let Some(class) = store.schedule_mut().class_mut(day, index) else {
+        let saved = store
+            .schedule()
+            .classes(day)
+            .iter()
+            .find(|c| (c.start, c.end) == (start.start, start.end))
+            .cloned();
+        let Some(saved) = saved else {
             return;
         };
-        *class = changed;
         // Dragged back to where it began: nothing is left to undo or save.
-        if self.edited.as_ref().is_some_and(|e| e.original == *class) {
-            self.edited = None;
+        if changed == saved {
+            store.clear_live();
+        } else {
+            store.set_live(day, changed);
         }
     }
 
     /// Paint the bar for `day` at `now` seconds after midnight. `false` means nothing to show.
     fn draw_at(&mut self, canvas: &mut Canvas, day: Weekday, now: Secs) -> bool {
         self.revert_stale(day, now);
-        let Some(view) = bar::view(self.store.borrow().schedule(), day, now) else {
+        let Some(view) = bar::view(&self.store.borrow().live_schedule(), day, now) else {
             return false;
         };
         bar::paint(canvas, &view, &self.store.borrow().config().colors);
@@ -271,7 +229,8 @@ impl App {
             return;
         };
         let store = self.store.borrow();
-        let Some(class) = store.schedule().classes(day).get(grab.index) else {
+        let schedule = store.live_schedule();
+        let Some(class) = schedule.classes(day).get(grab.index) else {
             return;
         };
         let Some(label) = editing::describe(class, grab.handle) else {
@@ -301,7 +260,6 @@ impl Handler for App {
     fn draw(&mut self, canvas: &mut Canvas) -> bool {
         if self.store.borrow_mut().poll() {
             // The file is the truth: changes made on the bar and not saved are dropped.
-            self.edited = None;
             self.grab = None;
         }
         let now = local_now();
@@ -327,7 +285,7 @@ impl Handler for App {
     fn menu_state(&self) -> MenuState {
         MenuState {
             autostart: self.services.autostart.is_enabled(),
-            can_save_default: self.edited.is_some(),
+            can_save_default: self.store.borrow().live().is_some(),
         }
     }
 
@@ -393,6 +351,12 @@ fn startup_rect(
         (_, _, Some(primary)) => default_rect(width, height, *primary, margin),
         _ => Rect::new(0, margin, width, height),
     }
+}
+
+/// The local day and time, for windows that need to know which class is running.
+pub(super) fn clock() -> (Weekday, Secs) {
+    let now = local_now();
+    (now.day, now.secs)
 }
 
 struct Now {
@@ -468,7 +432,7 @@ mod tests {
 
     use super::*;
     use crate::config::{self, Rgba};
-    use crate::schedule::{Class, DEFAULT_BREAK_LEN, MINUTE, hm};
+    use crate::schedule::{Class, DEFAULT_BREAK_LEN, MINUTE, State, hm};
 
     const MON: Weekday = Weekday::Mon;
 
@@ -590,14 +554,21 @@ mod tests {
         let config = file.load_or_create().config;
         let mut app = App::new(config, Some(file));
         // The class lasts all day, so whatever the time is the bar shows on Monday...
-        assert_eq!(app.store.borrow().schedule().classes(MON).len(), 1);
+        assert_eq!(app.store.borrow().live_schedule().classes(MON).len(), 1);
         // ...until the file is edited: a new schedule and colour take effect via poll.
         fs::write(&path, "[colors]\ngreen = \"#010203\"\n[tuesday]\nclasses = [{ start = \"08:00\", end = \"08:50\" }]\n").unwrap();
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas); // polls the file, then draws "now"
         assert_eq!(app.store.borrow().config().colors.green, Rgba::rgb(1, 2, 3));
-        assert!(app.store.borrow().schedule().classes(MON).is_empty());
-        assert_eq!(app.store.borrow().schedule().classes(Weekday::Tue).len(), 1);
+        assert!(app.store.borrow().live_schedule().classes(MON).is_empty());
+        assert_eq!(
+            app.store
+                .borrow()
+                .live_schedule()
+                .classes(Weekday::Tue)
+                .len(),
+            1
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -901,7 +872,7 @@ mod tests {
     const H: i32 = 40;
 
     fn brk_of(app: &App, index: usize) -> Break {
-        app.store.borrow().schedule().classes(MON)[index]
+        app.store.borrow().live_schedule().classes(MON)[index]
             .brk
             .unwrap()
     }
@@ -947,13 +918,13 @@ mod tests {
         // Orange of block 1 begins 10 minutes before its end (at 35 minutes = 350 px).
         assert!(app.grab_at(MON, NOW, 350, W, H));
         app.move_grab(20); // 2 minutes later: 8 minutes of orange left
-        let w = app.store.borrow().schedule().classes(MON)[0].warnings[0];
+        let w = app.store.borrow().live_schedule().classes(MON)[0].warnings[0];
         assert_eq!((w.orange / MINUTE, w.red / MINUTE), (8, 5));
         // And the red boundary of the second block (at 95 minutes = 950 px).
         app.grab_end();
         assert!(app.grab_at(MON, NOW, 950, W, H));
         app.move_grab(-20);
-        let w = app.store.borrow().schedule().classes(MON)[0].warnings[1];
+        let w = app.store.borrow().live_schedule().classes(MON)[0].warnings[1];
         assert_eq!((w.orange / MINUTE, w.red / MINUTE), (10, 7));
     }
 
@@ -1004,8 +975,8 @@ mod tests {
         app.move_grab(-50);
         app.grab_end();
         assert_eq!(minutes(brk_of(&app, 0)), (50, 60));
-        // Undoing goes back to the original, not to the state before the last drag.
-        app.undo_edit();
+        // Clearing the live class goes back to the original, not to the state before the last drag.
+        app.store.borrow_mut().clear_live();
         assert_eq!(minutes(brk_of(&app, 0)), (45, 55));
     }
 
@@ -1071,7 +1042,7 @@ mod tests {
         // 10:00 is 60 minutes in: now inside the moved break.
         let mut canvas = Canvas::new(1000, 40);
         assert!(app.draw_at(&mut canvas, MON, hm(10, 0)));
-        let state = app.store.borrow().schedule().state(MON, hm(10, 0));
+        let state = app.store.borrow().live_schedule().state(MON, hm(10, 0));
         assert!(matches!(state, State::Break { .. }), "{state:?}");
         assert!(app.menu_state().can_save_default);
     }
@@ -1161,12 +1132,12 @@ mod tests {
         assert!(app.grab_at(MON, NOW, 450, W, H));
         app.move_grab(20); // 2 minutes later: 8 minutes of orange
         app.grab_end();
-        let edited = app.store.borrow().schedule().classes(MON)[0].clone();
+        let edited = app.store.borrow().live_schedule().classes(MON)[0].clone();
 
         assert_eq!(app.run_command(Command::SaveDefault), None);
         assert!(!app.menu_state().can_save_default, "nothing left to save");
         assert_eq!(
-            app.store.borrow().schedule().classes(MON)[0],
+            app.store.borrow().live_schedule().classes(MON)[0],
             edited,
             "the bar keeps showing it"
         );
@@ -1192,7 +1163,7 @@ mod tests {
         // Our own save is not mistaken for an outside edit: the saved class stays as it is.
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas);
-        assert_eq!(app.store.borrow().schedule().classes(MON)[0], edited);
+        assert_eq!(app.store.borrow().live_schedule().classes(MON)[0], edited);
         let _ = fs::remove_dir_all(&dir);
     }
 

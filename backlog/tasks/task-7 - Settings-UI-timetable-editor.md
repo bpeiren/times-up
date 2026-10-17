@@ -1,10 +1,11 @@
 ---
 id: TASK-7
 title: 'Settings window: visual timetable editor'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-10-14 18:43'
-updated_date: '2026-10-17 18:42'
+updated_date: '2026-10-17 21:07'
 labels: []
 dependencies: []
 priority: medium
@@ -31,17 +32,29 @@ Out of scope: undo, keyboard nudging, multi-select, other languages, colours and
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The Settings... menu entry (bar menu and tray menu) opens one resizable Settings window showing the week; it replaces Open config (Notepad), and README and the in-app strings are updated
-- [ ] #2 Every weekday has a row with its classes on a shared time axis (at least 08:00 to 17:00) that grows when a class is dragged beyond its end
-- [ ] #3 Classes can be selected, moved, resized, added and removed without overlap; invalid states cannot be produced by dragging
-- [ ] #4 The selected class can be edited on a large live-style bar: break and zones dragged, a break added in Add break mode and removed, with tooltips showing times and duration
-- [ ] #5 Every change is saved to times-up.toml on mouse release, rewriting only the edited day, and the live bar picks it up without a restart; external edits reload the window
-- [ ] #6 Editing a running class with temporary live changes asks Replace or Save only
-- [ ] #7 The exe stays at or below 650 KB; the real size change is recorded in the task
+- [x] #1 The Settings... menu entry (bar menu and tray menu) opens one resizable Settings window showing the week; it replaces Open config (Notepad), and README and the in-app strings are updated
+- [x] #2 Every weekday has a row with its classes on a shared time axis (at least 08:00 to 17:00) that grows when a class is dragged beyond its end
+- [x] #3 Classes can be selected, moved, resized, added and removed without overlap; invalid states cannot be produced by dragging
+- [x] #4 The selected class can be edited on a large live-style bar: break and zones dragged, a break added in Add break mode and removed, with tooltips showing times and duration
+- [x] #5 Every change is saved to times-up.toml on mouse release, rewriting only the edited day, and the live bar picks it up without a restart; external edits reload the window
+- [x] #6 Editing a running class with temporary live changes asks Replace or Save only
+- [x] #7 The exe stays at or below 650 KB; the real size change is recorded in the task
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 All AC are met.
-- [ ] #2 All code is covered by sensible tests. All tests pass.
+- [x] #1 All AC are met.
+- [x] #2 All code is covered by sensible tests. All tests pass.
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Exe size across TASK-7: 549,888 bytes on main before, 505,344 bytes after (release build; limit 650 KB). Verified at the end of 7.5: 352 lib tests and 4 integration tests pass, clippy clean.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Settings window with a visual timetable editor, delivered in TASK-7.1 to 7.5 (PRs #2 to #6): a Store as single source of truth, the window shell and menu entries, week rows with movable classes, a detail bar for the selected class, and the Replace or Save only banner for the running class. Exe size went from 549,888 to 505,344 bytes. Verified with the full test suite and clippy.
+<!-- SECTION:FINAL_SUMMARY:END -->

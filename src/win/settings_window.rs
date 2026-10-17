@@ -17,7 +17,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, VK_DELETE, VK_ESCAPE,
+    ReleaseCapture, SetCapture, VK_DELETE, VK_ESCAPE, VK_RETURN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
@@ -36,10 +36,12 @@ use windows::core::{PCWSTR, w};
 
 use super::text::{render_mask, render_mask_aligned};
 use super::{monitors, wide, window};
+use crate::banner::{self, Answer};
 use crate::canvas::{Align, Canvas};
 use crate::config::{Rgba, WindowRect};
 use crate::detail::{self, Detail};
 use crate::interaction::{CursorShape, Rect};
+use crate::schedule::{Secs, Weekday};
 use crate::settings::{self, Layout, Section};
 use crate::store::Store;
 use crate::strings;
@@ -54,6 +56,11 @@ const LABEL_SCALE: f32 = 0.42;
 const TEXT_SCALE: f32 = 0.5;
 const LABEL_SELECTED: Rgba = Rgba::rgb(0xf2, 0xf2, 0xf2);
 
+/// A class by its day, start and end.
+type ClassKey = (Weekday, Secs, Secs);
+/// The local day and time.
+type Clock = fn() -> (Weekday, Secs);
+
 thread_local! {
     /// The open Settings window (an `HWND` as a number), or 0.
     static OPEN: Cell<isize> = const { Cell::new(0) };
@@ -65,6 +72,11 @@ struct State {
     section: Section,
     timetable: Timetable,
     detail: Detail,
+    /// The running class (day, start, end) whose temporary changes are being asked about.
+    banner: Option<ClassKey>,
+    /// The answer given for the running class, until that class ends.
+    answered: Option<(ClassKey, Answer)>,
+    clock: Clock,
     /// The store revision that was last painted.
     revision: u64,
 }
@@ -87,9 +99,85 @@ impl State {
         timetable::layout(self.areas(hwnd).0, Self::scale(hwnd), &days, axis)
     }
 
-    /// The area of the week and the area of the detail bar below it.
+    /// The area of the week and the area of the detail bar below it (under the banner, if any).
     fn areas(&self, hwnd: HWND) -> (Rect, Rect) {
-        detail::split(self.layout(hwnd).content, Self::scale(hwnd))
+        let content = self.layout(hwnd).content;
+        let scale = Self::scale(hwnd);
+        let rest = if self.banner.is_some() {
+            banner::split(content, scale).1
+        } else {
+            content
+        };
+        detail::split(rest, scale)
+    }
+
+    fn banner_layout(&self, hwnd: HWND) -> Option<banner::Layout> {
+        self.banner?;
+        let scale = Self::scale(hwnd);
+        Some(banner::layout(
+            banner::split(self.layout(hwnd).content, scale).0,
+            scale,
+        ))
+    }
+
+    /// An edit saved in Settings: when it changed the running class that has temporary changes
+    /// on the bar, apply the answer given before, or ask.
+    fn after_edit(&mut self) {
+        let touched_week = self.timetable.take_live_touched();
+        let touched_detail = self.detail.take_live_touched();
+        if !(touched_week || touched_detail) {
+            return;
+        }
+        let key = self
+            .store
+            .borrow()
+            .live()
+            .map(|l| (l.day, l.class.start, l.class.end));
+        let Some(key) = key else {
+            return;
+        };
+        match self.answered {
+            Some((answered, answer)) if answered == key => self.apply(answer),
+            _ => self.banner = Some(key),
+        }
+    }
+
+    fn apply(&mut self, answer: Answer) {
+        if answer == Answer::Replace {
+            self.store.borrow_mut().clear_live();
+        }
+    }
+
+    /// The teacher chose; the answer holds for this class until it ends.
+    fn answer(&mut self, hwnd: HWND, answer: Answer) {
+        if let Some(key) = self.banner.take() {
+            self.answered = Some((key, answer));
+            self.apply(answer);
+            invalidate(hwnd);
+        }
+    }
+
+    /// Forget an answer and a question whose class is over. Returns whether the banner went.
+    fn forget_ended(&mut self) -> bool {
+        let (day, now) = (self.clock)();
+        let store = self.store.borrow();
+        let schedule = store.schedule();
+        let running = |key: ClassKey| {
+            key.0 == day
+                && schedule
+                    .current_class(day, now)
+                    .and_then(|i| schedule.classes(day).get(i))
+                    .is_some_and(|c| (c.start, c.end) == (key.1, key.2))
+        };
+        if self.answered.is_some_and(|(key, _)| !running(key)) {
+            self.answered = None;
+        }
+        let gone =
+            self.banner.is_some() && (store.live().is_none() || !running(self.banner.unwrap()));
+        if gone {
+            self.banner = None;
+        }
+        gone
     }
 
     fn detail_layout(&self, hwnd: HWND) -> detail::Layout {
@@ -133,6 +221,7 @@ impl State {
         match self.section {
             Section::Timetable => {
                 let (week, below) = (self.week_layout(hwnd), self.detail_layout(hwnd));
+                let banner = self.banner_layout(hwnd);
                 let store = self.store.borrow();
                 let canvas = &mut self.canvas;
                 let mut text = |canvas: &mut Canvas, text: &str, area, color, align| {
@@ -142,6 +231,9 @@ impl State {
                 let selection = self.timetable.selected(&store);
                 self.detail
                     .paint(canvas, &store, selection, &below, &mut text);
+                if let Some(layout) = banner {
+                    banner::paint(canvas, &layout, &mut text);
+                }
             }
         }
     }
@@ -151,6 +243,14 @@ impl State {
             if section != self.section {
                 self.section = section;
                 invalidate(hwnd);
+            }
+            return;
+        }
+        if let Some(layout) = self.banner_layout(hwnd)
+            && contains(layout.area, x, y)
+        {
+            if let Some(answer) = layout.answer_at(x, y) {
+                self.answer(hwnd, answer);
             }
             return;
         }
@@ -168,6 +268,7 @@ impl State {
             }
         }
         self.sync_detail();
+        self.after_edit();
         invalidate(hwnd);
     }
 
@@ -188,6 +289,7 @@ impl State {
         if self.is_dragging() {
             self.timetable.release(&mut self.store.borrow_mut());
             self.detail.release(&mut self.store.borrow_mut());
+            self.after_edit();
             invalidate(hwnd);
         }
     }
@@ -199,15 +301,19 @@ impl State {
         invalidate(hwnd);
     }
 
-    /// Escape leaves the Add break mode (or gives up a drag of the detail bar).
+    /// Escape answers the question with Save only; otherwise it leaves the Add break mode (or
+    /// gives up a drag of the detail bar).
     fn escape(&mut self, hwnd: HWND) {
-        if self.detail.escape() {
+        if self.banner.is_some() {
+            self.answer(hwnd, Answer::SaveOnly);
+        } else if self.detail.escape() {
             invalidate(hwnd);
         }
     }
 
     fn delete_key(&mut self, hwnd: HWND) {
         self.timetable.remove_selected(&mut self.store.borrow_mut());
+        self.after_edit();
         invalidate(hwnd);
     }
 
@@ -308,6 +414,11 @@ fn invalidate(hwnd: HWND) {
 
 /// Open the Settings window on `store`, or bring the open one to the front. Returns its handle.
 pub fn open(store: Rc<RefCell<Store>>) -> windows::core::Result<HWND> {
+    open_with_clock(store, super::app::clock)
+}
+
+/// Like [`open`], with the clock that tells which class is running.
+pub fn open_with_clock(store: Rc<RefCell<Store>>, clock: Clock) -> windows::core::Result<HWND> {
     let existing = HWND(OPEN.get() as *mut _);
     // SAFETY: plain calls on a handle that is checked first.
     unsafe {
@@ -333,6 +444,9 @@ pub fn open(store: Rc<RefCell<Store>>) -> windows::core::Result<HWND> {
         section: Section::Timetable,
         timetable: Timetable::default(),
         detail: Detail::default(),
+        banner: None,
+        answered: None,
+        clock,
         revision,
     });
     let raw = Box::into_raw(state);
@@ -454,7 +568,7 @@ unsafe extern "system" fn window_proc(
             WM_SIZE => invalidate(hwnd),
             WM_TIMER if wparam.0 == TIMER_ID => {
                 if let Some(state) = state_of(hwnd)
-                    && state.store.borrow().revision() != state.revision
+                    && (state.forget_ended() || state.store.borrow().revision() != state.revision)
                 {
                     invalidate(hwnd);
                 }
@@ -489,6 +603,12 @@ unsafe extern "system" fn window_proc(
             WM_CAPTURECHANGED => {
                 if let Some(state) = state_of(hwnd) {
                     state.cancel_drags(hwnd);
+                }
+                return LRESULT(0);
+            }
+            WM_KEYDOWN if wparam.0 == usize::from(VK_RETURN.0) => {
+                if let Some(state) = state_of(hwnd) {
+                    state.answer(hwnd, Answer::Replace);
                 }
                 return LRESULT(0);
             }
@@ -1017,6 +1137,228 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
             assert!(state.timetable.selected(&store.borrow()).is_some());
             assert!(!state.detail.is_adding());
         }
+        close(hwnd);
+    }
+
+    // ---- the running class with temporary changes ----
+
+    thread_local! {
+        static NOW: Cell<(Weekday, Secs)> = const { Cell::new((Weekday::Mon, 9 * 3600 + 10 * 60)) };
+    }
+
+    fn fake_clock() -> (Weekday, Secs) {
+        NOW.get()
+    }
+
+    const LONG: &str = "[monday]\nclasses = [{ start = \"09:00\", end = \"10:40\" }]\n";
+
+    /// A window on Monday 09:00-10:40 that is running, with a temporary change on the bar.
+    fn running_with_live(name: &str) -> (Scratch, Rc<RefCell<Store>>, HWND) {
+        NOW.set((Weekday::Mon, 9 * 3600 + 10 * 60));
+        let dir = Scratch::new(name, LONG);
+        let store = dir.store();
+        let mut live = store.borrow().schedule().classes(Weekday::Mon)[0].clone();
+        live.warnings[0] = crate::schedule::Warnings::new(8 * 60, 2 * 60).unwrap();
+        store.borrow_mut().set_live(Weekday::Mon, live);
+        let hwnd = open_with_clock(store.clone(), fake_clock).unwrap();
+        (dir, store, hwnd)
+    }
+
+    fn click(hwnd: HWND, x: i32, y: i32) {
+        use windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP;
+        mouse(hwnd, WM_LBUTTONDOWN, x, y);
+        mouse(hwnd, WM_LBUTTONUP, x, y);
+    }
+
+    fn key(hwnd: HWND, vk: usize) {
+        use windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN;
+        // SAFETY: on the window's thread.
+        unsafe {
+            SendMessageW(hwnd, WM_KEYDOWN, Some(WPARAM(vk)), None);
+        }
+    }
+
+    fn banner_shown(hwnd: HWND) -> bool {
+        // SAFETY: on the window's thread.
+        unsafe { state_of(hwnd) }.unwrap().banner.is_some()
+    }
+
+    fn remove_break(hwnd: HWND, l: &detail::Layout) {
+        click(hwnd, l.remove.x + 3, l.remove.y + 3);
+    }
+
+    #[test]
+    fn editing_the_running_class_with_temporary_changes_asks_what_to_do() {
+        let (_dir, store, hwnd) = running_with_live("ask");
+        let l = select_monday(hwnd);
+        assert!(!banner_shown(hwnd));
+        remove_break(hwnd, &l);
+        assert!(
+            banner_shown(hwnd),
+            "the saved class changed under the live one"
+        );
+        assert!(store.borrow().live().is_some(), "until the teacher chooses");
+        assert!(
+            store.borrow().schedule().classes(Weekday::Mon)[0]
+                .brk
+                .is_none()
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn enter_replaces_the_temporary_changes_with_the_saved_class() {
+        let (_dir, store, hwnd) = running_with_live("replace");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        key(hwnd, 0x0d);
+        assert!(!banner_shown(hwnd));
+        assert!(store.borrow().live().is_none());
+        assert_eq!(
+            store.borrow().live_schedule().classes(Weekday::Mon),
+            store.borrow().schedule().classes(Weekday::Mon)
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn escape_saves_only_and_keeps_the_temporary_changes() {
+        let (dir, store, hwnd) = running_with_live("save-only");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        key(hwnd, 0x1b);
+        assert!(!banner_shown(hwnd));
+        assert!(store.borrow().live().is_some());
+        let shown = store.borrow().live_schedule().classes(Weekday::Mon)[0].clone();
+        assert_eq!(
+            shown.warnings[0].orange,
+            8 * 60,
+            "the bar keeps its version"
+        );
+        assert!(
+            dir.text().contains("break_len = 0"),
+            "while the file has the new one"
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_buttons_of_the_banner_answer_too() {
+        let (_dir, store, hwnd) = running_with_live("buttons");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        // SAFETY: on the window's thread.
+        let banner = unsafe { state_of(hwnd) }
+            .unwrap()
+            .banner_layout(hwnd)
+            .unwrap();
+        click(hwnd, banner.replace.x + 3, banner.replace.y + 3);
+        assert!(!banner_shown(hwnd));
+        assert!(store.borrow().live().is_none());
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_answer_holds_for_the_running_class_so_it_is_asked_once() {
+        use windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE;
+        let (_dir, store, hwnd) = running_with_live("once");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        key(hwnd, 0x1b);
+
+        // Another edit of the same class: add a break again. No question this time.
+        // SAFETY: on the window's thread.
+        let l = unsafe { state_of(hwnd) }.unwrap().detail_layout(hwnd);
+        click(hwnd, l.add.x + 3, l.add.y + 3);
+        let (x, y) = (l.bar.x + l.bar.w / 2, l.bar.y + l.bar.h / 2);
+        mouse(hwnd, WM_MOUSEMOVE, x, y);
+        click(hwnd, x, y);
+        assert!(
+            store.borrow().schedule().classes(Weekday::Mon)[0]
+                .brk
+                .is_some()
+        );
+        assert!(!banner_shown(hwnd), "already answered for this class");
+        assert!(store.borrow().live().is_some(), "Save only still holds");
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_answer_is_forgotten_when_the_class_ends() {
+        let (_dir, store, hwnd) = running_with_live("ends");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        key(hwnd, 0x1b);
+        // SAFETY: on the window's thread.
+        unsafe { assert!(state_of(hwnd).unwrap().answered.is_some()) };
+        NOW.set((Weekday::Mon, 12 * 3600));
+        // SAFETY: as above.
+        unsafe {
+            SendMessageW(hwnd, WM_TIMER, Some(WPARAM(TIMER_ID)), None);
+            assert!(state_of(hwnd).unwrap().answered.is_none());
+        }
+        assert!(store.borrow().live().is_some(), "the bar clears it itself");
+        close(hwnd);
+    }
+
+    #[test]
+    fn nothing_is_asked_without_temporary_changes_or_for_another_class() {
+        NOW.set((Weekday::Mon, 9 * 3600 + 10 * 60));
+        let dir = Scratch::new("quiet", LONG);
+        let store = dir.store();
+        let hwnd = open_with_clock(store.clone(), fake_clock).unwrap();
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        assert!(
+            !banner_shown(hwnd),
+            "no temporary changes: the bar follows the file"
+        );
+        close(hwnd);
+
+        let (_dir, store, hwnd) = running_with_live("other");
+        let (_, (px, py)) = class_and_plus(hwnd);
+        click(hwnd, px, py); // adds a second class
+        assert_eq!(store.borrow().schedule().classes(Weekday::Mon).len(), 2);
+        assert!(
+            !banner_shown(hwnd),
+            "the running class itself was not edited"
+        );
+        assert!(store.borrow().live().is_some());
+        close(hwnd);
+    }
+
+    #[test]
+    fn closing_the_window_counts_as_save_only() {
+        let (_dir, store, hwnd) = running_with_live("close");
+        let l = select_monday(hwnd);
+        remove_break(hwnd, &l);
+        assert!(banner_shown(hwnd));
+        close(hwnd);
+        assert!(
+            store.borrow().live().is_some(),
+            "the temporary changes stay"
+        );
+        // Opening it again starts without a question.
+        let again = open_with_clock(store.clone(), fake_clock).unwrap();
+        assert!(!banner_shown(again));
+        close(again);
+    }
+
+    #[test]
+    fn moving_the_running_class_drops_its_temporary_changes_without_a_question() {
+        use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONUP, WM_MOUSEMOVE};
+        let (_dir, store, hwnd) = running_with_live("moved");
+        let ((x, y), _) = class_and_plus(hwnd);
+        mouse(hwnd, WM_LBUTTONDOWN, x, y);
+        mouse(hwnd, WM_MOUSEMOVE, x + 60, y);
+        mouse(hwnd, WM_LBUTTONUP, x + 60, y);
+        assert!(store.borrow().revision() > 0);
+        assert!(!banner_shown(hwnd));
+        assert_eq!(
+            store.borrow().live_base(),
+            None,
+            "no longer the class they belonged to"
+        );
         close(hwnd);
     }
 }
