@@ -11,9 +11,9 @@ Getting started
    install. The first time, it writes times-up.toml next to it: a commented sample timetable.
 2. You will not see the bar yet: it only shows during class times (and 5 minutes before), and the
    sample timetable has morning classes only. A small icon appears in the notification area
-   (maybe behind the ^ arrow) to show that the app is running. Click it and choose
-   "Open config (Notepad)", then set the classes for each weekday. Save the file: the bar picks up
-   the change by itself.
+   (maybe behind the ^ arrow) to show that the app is running. Open times-up.toml, next to the
+   exe, in any text editor (Notepad will do) and set the classes for each weekday. Save the file:
+   the bar picks up the change by itself.
 
 The bar
 -------
@@ -26,7 +26,8 @@ The bar
   change is forgotten when the class is over.
 - Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
-    Open config (Notepad)           opens times-up.toml
+    Settings...                     opens the Settings window (more to come: for now, edit
+                                    times-up.toml in a text editor)
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit

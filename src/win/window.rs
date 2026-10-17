@@ -1094,7 +1094,7 @@ mod tests {
 
         fn run_command(&mut self, command: Command) -> Option<String> {
             self.seen.borrow_mut().push(command);
-            (command == Command::OpenConfig).then(|| "could not open".to_string())
+            (command == Command::Settings).then(|| "could not open".to_string())
         }
     }
 
@@ -1121,13 +1121,13 @@ mod tests {
     fn menu_commands_reach_the_handler_and_its_errors_come_back() {
         let (hwnd, seen) = commands_window(false);
         assert_eq!(
-            execute(hwnd, Command::OpenConfig),
+            execute(hwnd, Command::Settings),
             Some("could not open".to_string())
         );
         assert_eq!(execute(hwnd, Command::ToggleAutostart), None);
         assert_eq!(
             *seen.borrow(),
-            vec![Command::OpenConfig, Command::ToggleAutostart]
+            vec![Command::Settings, Command::ToggleAutostart]
         );
         // SAFETY: query on our own window.
         assert!(
@@ -1150,7 +1150,7 @@ mod tests {
     fn handlers_without_commands_ignore_them() {
         let draws = Rc::new(Cell::new(0));
         let hwnd = make(&draws);
-        assert_eq!(execute(hwnd, Command::OpenConfig), None);
+        assert_eq!(execute(hwnd, Command::Settings), None);
         assert_eq!(execute(hwnd, Command::ToggleAutostart), None);
         destroy(hwnd);
         // The default handler has a plain menu: nothing checked, nothing to save.

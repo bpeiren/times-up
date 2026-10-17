@@ -4,6 +4,7 @@ pub mod app;
 pub mod autostart;
 pub mod menu;
 pub mod monitors;
+pub mod settings_window;
 pub mod surface;
 pub mod text;
 pub mod tray;

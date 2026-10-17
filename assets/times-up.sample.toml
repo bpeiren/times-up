@@ -22,6 +22,12 @@ text = "#ffffff"
 # width = 600
 # height = 60
 
+[settings_window]            # written by the app when you move or resize the Settings window
+# x = 100
+# y = 100
+# width = 860
+# height = 520
+
 # One section per weekday (monday ... friday). Times are 24-hour HH:MM.
 # A class of 100 minutes or more gets a break in the middle. Optional per class, in minutes:
 #   break_start = 45, break_len = 10 (0 = no break), orange = [10, 10], red = [5, 5]  (one value per block)
