@@ -101,6 +101,15 @@ impl Store {
             .ok_or(ConfigError::NoFile)?
             .save_window(&rect)
     }
+
+    /// Remember where the Settings window is; like the bar's position this is not an edit.
+    pub fn save_settings_window(&mut self, rect: WindowRect) -> Result<(), ConfigError> {
+        self.config.settings_window = rect;
+        self.file
+            .as_mut()
+            .ok_or(ConfigError::NoFile)?
+            .save_settings_window(&rect)
+    }
 }
 
 #[cfg(test)]

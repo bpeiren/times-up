@@ -102,6 +102,8 @@ pub struct Config {
     pub schedule: Schedule,
     pub colors: Colors,
     pub window: WindowRect,
+    /// Where the Settings window was last.
+    pub settings_window: WindowRect,
     /// Length of the break that classes of 100 minutes or more get by default.
     pub default_break: Secs,
     /// Warning thresholds used by classes that do not set their own.
@@ -114,6 +116,7 @@ impl Default for Config {
             schedule: Schedule::new(),
             colors: Colors::default(),
             window: WindowRect::default(),
+            settings_window: WindowRect::default(),
             default_break: DEFAULT_BREAK_LEN,
             warnings: Warnings::default(),
         }
@@ -204,18 +207,8 @@ pub fn parse(text: &str) -> Loaded {
         c.text = p.color(t, "text", c.text);
     }
 
-    if let Some(t) = p.section(&doc, "window") {
-        config.window = WindowRect {
-            x: p.int(t, "window", "x"),
-            y: p.int(t, "window", "y"),
-            width: p
-                .int(t, "window", "width")
-                .and_then(|v| u32::try_from(v).ok()),
-            height: p
-                .int(t, "window", "height")
-                .and_then(|v| u32::try_from(v).ok()),
-        };
-    }
+    config.window = p.rect(&doc, "window");
+    config.settings_window = p.rect(&doc, "settings_window");
 
     let mut schedule = Schedule::new();
     schedule.lead_in = lead_in;
@@ -280,6 +273,21 @@ impl Problems {
                 ));
                 default
             }),
+        }
+    }
+
+    /// The saved rectangle of a window section; empty when the section is absent.
+    fn rect(&mut self, doc: &DocumentMut, name: &str) -> WindowRect {
+        let Some(t) = self.section(doc, name) else {
+            return WindowRect::default();
+        };
+        let size =
+            |p: &mut Self, key: &str| p.int(t, name, key).and_then(|v| u32::try_from(v).ok());
+        WindowRect {
+            x: self.int(t, name, "x"),
+            y: self.int(t, name, "y"),
+            width: size(self, "width"),
+            height: size(self, "height"),
         }
     }
 
@@ -451,13 +459,11 @@ fn pair_value(a: Secs, b: Secs) -> Value {
     Value::Array(arr)
 }
 
-fn set_window(doc: &mut DocumentMut, rect: &WindowRect) {
-    let section = doc
-        .entry("window")
-        .or_insert_with(|| Item::Table(Table::new()));
+fn set_window(doc: &mut DocumentMut, name: &str, rect: &WindowRect) {
+    let section = doc.entry(name).or_insert_with(|| Item::Table(Table::new()));
     let Some(t) = section.as_table_like_mut() else {
         *section = Item::Table(Table::new());
-        return set_window(doc, rect);
+        return set_window(doc, name, rect);
     };
     let mut set = |key: &str, v: Option<i64>| {
         if let Some(v) = v {
@@ -629,7 +635,14 @@ impl ConfigFile {
 
     pub fn save_window(&mut self, rect: &WindowRect) -> Result<(), ConfigError> {
         self.edit(|doc| {
-            set_window(doc, rect);
+            set_window(doc, "window", rect);
+            Ok(())
+        })
+    }
+
+    pub fn save_settings_window(&mut self, rect: &WindowRect) -> Result<(), ConfigError> {
+        self.edit(|doc| {
+            set_window(doc, "settings_window", rect);
             Ok(())
         })
     }
@@ -1219,10 +1232,46 @@ classes = [{ start = "09:00", end = "09:50" }]
         let text = fs::read_to_string(dir.file()).unwrap();
         assert_eq!(
             text.matches("width = ").count(),
-            2,
-            "one active key and the commented hint:\n{text}"
+            3,
+            "one active key and the commented hints of both windows:\n{text}"
         );
         assert_eq!(parse(&text).config.window, rect2);
+    }
+
+    #[test]
+    fn the_settings_window_has_its_own_section() {
+        let dir = TempDir::new("settings-window");
+        let mut file = ConfigFile::new(dir.file());
+        file.load_or_create();
+        let bar = WindowRect {
+            x: Some(1),
+            y: Some(2),
+            width: Some(600),
+            height: Some(60),
+        };
+        let settings = WindowRect {
+            x: Some(-20),
+            y: Some(30),
+            width: Some(900),
+            height: Some(500),
+        };
+        file.save_window(&bar).unwrap();
+        file.save_settings_window(&settings).unwrap();
+        assert!(file.poll().is_none(), "our own write is not an edit");
+        let loaded = parse(&fs::read_to_string(dir.file()).unwrap());
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.config.window, bar);
+        assert_eq!(loaded.config.settings_window, settings);
+        assert_eq!(
+            parse(
+                "[settings_window]
+width = -5
+"
+            )
+            .config
+            .settings_window,
+            WindowRect::default()
+        );
     }
 
     #[test]

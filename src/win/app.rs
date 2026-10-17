@@ -1,14 +1,16 @@
 //! Startup and the per-tick work: load the config, create the window, and each second decide
 //! what the bar shows from the local time and the schedule.
 
-use std::path::{Path, PathBuf};
-use std::process::Command as Process;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
 use super::autostart::Autostart;
 use super::menu::{Command, MenuState};
 use super::monitors;
+use super::settings_window;
 use super::text::render_mask;
 use super::window::{self, DEFAULT_HEIGHT, DEFAULT_WIDTH, Handler, Placement};
 use crate::bar;
@@ -33,15 +35,14 @@ const DRAG_STRIP_SCALE: f32 = 0.32;
 /// Keep the drag label this far (as a share of the bar width) from either end.
 const DRAG_LABEL_MARGIN: f32 = 0.08;
 
-/// Opens a file for editing.
-type Opener = Box<dyn Fn(&Path) -> std::io::Result<()>>;
+/// Opens the Settings window on the store, or brings the open one to the front.
+type SettingsOpener = Box<dyn Fn(&Rc<RefCell<Store>>) -> Result<(), String>>;
 
 /// What the menu commands act on, so tests can swap in fakes instead of touching the real
-/// registry or starting Notepad.
+/// registry or opening a window.
 struct Services {
     autostart: Autostart,
-    /// Open the config file for editing.
-    open_config: Opener,
+    open_settings: SettingsOpener,
 }
 
 impl Services {
@@ -49,7 +50,11 @@ impl Services {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("times-up.exe"));
         Self {
             autostart: Autostart::current_user(exe),
-            open_config: Box::new(|path| Process::new("notepad.exe").arg(path).spawn().map(|_| ())),
+            open_settings: Box::new(|store| {
+                settings_window::open(store.clone())
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }),
         }
     }
 }
@@ -76,7 +81,7 @@ struct Grab {
 
 struct App {
     /// The config and the file it lives in; polled each tick so edits to the file apply immediately.
-    store: Store,
+    store: Rc<RefCell<Store>>,
     /// Milliseconds past the second at the last tick, used to time the next one.
     last_ms: u32,
     services: Services,
@@ -91,7 +96,7 @@ impl App {
 
     fn with_services(config: Config, file: Option<ConfigFile>, services: Services) -> Self {
         Self {
-            store: Store::new(config, file),
+            store: Rc::new(RefCell::new(Store::new(config, file))),
             last_ms: 0,
             services,
             edited: None,
@@ -101,7 +106,7 @@ impl App {
 
     /// The class the bar is showing at `now` (counting from the lead-in until it has just ended).
     fn current_class(&self, day: Weekday, now: Secs) -> Option<usize> {
-        match self.store.schedule().state(day, now) {
+        match self.store.borrow().schedule().state(day, now) {
             State::LeadIn { class, .. }
             | State::Running { class, .. }
             | State::Break { class, .. }
@@ -127,6 +132,7 @@ impl App {
         if let Some(edited) = self.edited.take()
             && let Some(class) = self
                 .store
+                .borrow_mut()
                 .schedule_mut()
                 .class_mut(edited.day, edited.index)
         {
@@ -139,8 +145,14 @@ impl App {
     fn save_default(&mut self) -> Option<String> {
         let edited = self.edited.as_ref()?;
         let (day, index) = (edited.day, edited.index);
-        let class = self.store.schedule().classes(day).get(index)?.clone();
-        match self.store.save_class(day, &class) {
+        let class = self
+            .store
+            .borrow()
+            .schedule()
+            .classes(day)
+            .get(index)?
+            .clone();
+        match self.store.borrow_mut().save_class(day, &class) {
             Err(ConfigError::NoFile) => Some("There is no settings file to save to.".to_string()),
             Ok(()) => {
                 // What is on the bar is now what the file says; nothing left to undo.
@@ -165,7 +177,8 @@ impl App {
         h: i32,
     ) -> Option<(usize, Handle)> {
         let index = self.current_class(day, now)?;
-        let class = self.store.schedule().classes(day).get(index)?;
+        let store = self.store.borrow();
+        let class = store.schedule().classes(day).get(index)?;
         let handle = editing::handle_at(class, x as f32, w as f32, Self::handle_grip(h))?;
         Some((index, handle))
     }
@@ -175,7 +188,7 @@ impl App {
         let Some((index, handle)) = self.handle_under(day, now, x, w, h) else {
             return false;
         };
-        let start = self.store.schedule().classes(day)[index].clone();
+        let start = self.store.borrow().schedule().classes(day)[index].clone();
         self.grab = Some(Grab {
             handle,
             start,
@@ -213,7 +226,8 @@ impl App {
                 original: start,
             });
         }
-        let Some(class) = self.store.schedule_mut().class_mut(day, index) else {
+        let mut store = self.store.borrow_mut();
+        let Some(class) = store.schedule_mut().class_mut(day, index) else {
             return;
         };
         *class = changed;
@@ -226,17 +240,24 @@ impl App {
     /// Paint the bar for `day` at `now` seconds after midnight. `false` means nothing to show.
     fn draw_at(&mut self, canvas: &mut Canvas, day: Weekday, now: Secs) -> bool {
         self.revert_stale(day, now);
-        let Some(view) = bar::view(self.store.schedule(), day, now) else {
+        let Some(view) = bar::view(self.store.borrow().schedule(), day, now) else {
             return false;
         };
-        bar::paint(canvas, &view, &self.store.config().colors);
+        bar::paint(canvas, &view, &self.store.borrow().config().colors);
         let (w, h) = (canvas.width(), canvas.height());
         let font_px = (h as f32 * LABEL_SCALE) as i32;
         if let Some(mask) = render_mask(&view.label, w, h, font_px) {
             // The mask has the text in the middle of the whole bar; shift it to the middle of the
             // block that the countdown is about.
             let shift = (view.label_center * w as f32 - w as f32 / 2.0).round() as i32;
-            canvas.blend_mask(&mask, w, h, shift, 0, self.store.config().colors.text);
+            canvas.blend_mask(
+                &mask,
+                w,
+                h,
+                shift,
+                0,
+                self.store.borrow().config().colors.text,
+            );
         }
         self.draw_drag_label(canvas, day);
         true
@@ -247,7 +268,8 @@ impl App {
         let Some(grab) = self.grab.as_ref().filter(|g| g.day == day) else {
             return;
         };
-        let Some(class) = self.store.schedule().classes(day).get(grab.index) else {
+        let store = self.store.borrow();
+        let Some(class) = store.schedule().classes(day).get(grab.index) else {
             return;
         };
         let Some(label) = editing::describe(class, grab.handle) else {
@@ -267,7 +289,7 @@ impl App {
                 strip,
                 shift,
                 (h - strip) as i32,
-                self.store.config().colors.text,
+                self.store.borrow().config().colors.text,
             );
         }
     }
@@ -275,7 +297,7 @@ impl App {
 
 impl Handler for App {
     fn draw(&mut self, canvas: &mut Canvas) -> bool {
-        if self.store.poll() {
+        if self.store.borrow_mut().poll() {
             // The file is the truth: changes made on the bar and not saved are dropped.
             self.edited = None;
             self.grab = None;
@@ -292,7 +314,7 @@ impl Handler for App {
     /// Remember where the teacher put the bar. A config that cannot be written (read-only
     /// folder) just means the position is not kept for the next start.
     fn window_changed(&mut self, rect: Rect) {
-        let _ = self.store.save_window(WindowRect {
+        let _ = self.store.borrow_mut().save_window(WindowRect {
             x: Some(rect.x),
             y: Some(rect.y),
             width: u32::try_from(rect.w).ok(),
@@ -326,20 +348,14 @@ impl Handler for App {
             .map(|_| CursorShape::SizeWestEast)
     }
 
-    /// Save the class defaults, open the config in Notepad, or turn "Start with Windows" on or
+    /// Save the class defaults, open the Settings window, or turn "Start with Windows" on or
     /// off. A failure comes back as text for the user and leaves things as they were.
     fn run_command(&mut self, command: Command) -> Option<String> {
         match command {
             Command::SaveDefault => self.save_default(),
-            Command::OpenConfig => {
-                let path = self
-                    .store
-                    .path()
-                    .map_or_else(config::default_path, Path::to_path_buf);
-                (self.services.open_config)(&path)
-                    .err()
-                    .map(|e| format!("Could not open {}: {e}", path.display()))
-            }
+            Command::Settings => (self.services.open_settings)(&self.store)
+                .err()
+                .map(|e| format!("Could not open the settings window: {e}")),
             Command::ToggleAutostart => self
                 .services
                 .autostart
@@ -501,7 +517,7 @@ mod tests {
     #[test]
     fn label_changes_with_the_time_and_is_drawn_in_the_text_colour() {
         let mut app = app_with(vec![class(hm(9, 0), hm(10, 40))]);
-        app.store.config_mut().colors.text = Rgba::rgb(255, 0, 255);
+        app.store.borrow_mut().config_mut().colors.text = Rgba::rgb(255, 0, 255);
         let mut running = Canvas::new(500, 50);
         let mut brk = Canvas::new(500, 50);
         assert!(app.draw_at(&mut running, MON, hm(9, 10)));
@@ -549,7 +565,7 @@ mod tests {
     #[test]
     fn colours_come_from_the_config() {
         let mut app = app_with(vec![class(hm(9, 0), hm(9, 50))]);
-        app.store.config_mut().colors.green = Rgba::rgb(10, 20, 30);
+        app.store.borrow_mut().config_mut().colors.green = Rgba::rgb(10, 20, 30);
         let mut canvas = Canvas::new(500, 50);
         app.draw_at(&mut canvas, MON, hm(9, 25));
         assert_eq!(canvas.pixel(20, 25), 0xff0a_141e);
@@ -572,14 +588,14 @@ mod tests {
         let config = file.load_or_create().config;
         let mut app = App::new(config, Some(file));
         // The class lasts all day, so whatever the time is the bar shows on Monday...
-        assert_eq!(app.store.schedule().classes(MON).len(), 1);
+        assert_eq!(app.store.borrow().schedule().classes(MON).len(), 1);
         // ...until the file is edited: a new schedule and colour take effect via poll.
         fs::write(&path, "[colors]\ngreen = \"#010203\"\n[tuesday]\nclasses = [{ start = \"08:00\", end = \"08:50\" }]\n").unwrap();
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas); // polls the file, then draws "now"
-        assert_eq!(app.store.config().colors.green, Rgba::rgb(1, 2, 3));
-        assert!(app.store.schedule().classes(MON).is_empty());
-        assert_eq!(app.store.schedule().classes(Weekday::Tue).len(), 1);
+        assert_eq!(app.store.borrow().config().colors.green, Rgba::rgb(1, 2, 3));
+        assert!(app.store.borrow().schedule().classes(MON).is_empty());
+        assert_eq!(app.store.borrow().schedule().classes(Weekday::Tue).len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -687,12 +703,12 @@ mod tests {
             reloaded.window,
             saved(Some(500), Some(40), Some(640), Some(72))
         );
-        assert_eq!(app.store.config().window, reloaded.window);
+        assert_eq!(app.store.borrow().config().window, reloaded.window);
 
         // Our own save is not mistaken for an outside edit, so it does not reload mid-drag.
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas);
-        assert_eq!(app.store.config().window, reloaded.window);
+        assert_eq!(app.store.borrow().config().window, reloaded.window);
 
         // The next start comes back at the same place.
         assert_eq!(
@@ -708,7 +724,7 @@ mod tests {
         let mut app = app_with(vec![]);
         app.window_changed(Rect::new(10, 20, 300, 40));
         assert_eq!(
-            app.store.config().window,
+            app.store.borrow().config().window,
             saved(Some(10), Some(20), Some(300), Some(40))
         );
 
@@ -728,7 +744,7 @@ mod tests {
         app.window_changed(Rect::new(1, 2, 300, 40));
         assert_eq!(fs::read_to_string(&path).unwrap(), config::DEFAULT_CONFIG);
         assert_eq!(
-            app.store.config().window.x,
+            app.store.borrow().config().window.x,
             Some(1),
             "still remembered while running"
         );
@@ -748,11 +764,12 @@ mod tests {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteKeyW};
     use windows::core::PCWSTR;
 
-    /// Services with a throwaway registry key and an opener that records instead of starting
-    /// Notepad. The key is deleted when this is dropped.
+    /// Services with a throwaway registry key and an opener that records instead of opening a
+    /// window. The key is deleted when this is dropped.
     struct Fake {
         subkey: String,
-        opened: Rc<RefCell<Vec<PathBuf>>>,
+        /// The stores the Settings window was asked to open on.
+        opened: Rc<RefCell<Vec<Rc<RefCell<Store>>>>>,
     }
 
     impl Fake {
@@ -772,10 +789,10 @@ mod tests {
                     "TimesUp",
                     r"C:\Tools\times-up.exe",
                 ),
-                open_config: Box::new(move |path| {
-                    opened.borrow_mut().push(path.to_path_buf());
+                open_settings: Box::new(move |store| {
+                    opened.borrow_mut().push(store.clone());
                     if open_fails {
-                        Err(std::io::Error::other("notepad is missing"))
+                        Err("no window for you".to_string())
                     } else {
                         Ok(())
                     }
@@ -800,31 +817,24 @@ mod tests {
     }
 
     #[test]
-    fn open_config_opens_the_config_file() {
+    fn settings_opens_the_settings_window_on_the_apps_store() {
         let fake = Fake::new("open");
-        let dir: PathBuf =
-            std::env::temp_dir().join(format!("times-up-app-open-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let mut file = ConfigFile::new(dir.join(config::FILE_NAME));
-        let config = file.load_or_create().config;
-        let mut app = App::with_services(config, Some(file), fake.services(false));
+        let mut app = App::with_services(Config::default(), None, fake.services(false));
 
-        assert_eq!(app.run_command(Command::OpenConfig), None);
-        assert_eq!(*fake.opened.borrow(), vec![dir.join(config::FILE_NAME)]);
-        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(app.run_command(Command::Settings), None);
+        assert_eq!(app.run_command(Command::Settings), None);
+        let opened = fake.opened.borrow();
+        assert_eq!(opened.len(), 2);
+        assert!(opened.iter().all(|s| Rc::ptr_eq(s, &app.store)));
     }
 
     #[test]
-    fn open_config_failure_is_reported_with_the_path_and_the_reason() {
+    fn settings_failure_is_reported_with_the_reason() {
         let fake = Fake::new("open-fails");
         let mut app = App::with_services(Config::default(), None, fake.services(true));
-        let message = app.run_command(Command::OpenConfig).expect("a message");
-        assert!(message.contains("Could not open"), "{message}");
-        assert!(message.contains(config::FILE_NAME), "{message}");
-        assert!(message.contains("notepad is missing"), "{message}");
-        // Without a loaded file the standard place next to the exe is opened.
-        assert_eq!(*fake.opened.borrow(), vec![config::default_path()]);
+        let message = app.run_command(Command::Settings).expect("a message");
+        assert!(message.contains("settings window"), "{message}");
+        assert!(message.contains("no window for you"), "{message}");
     }
 
     #[test]
@@ -851,7 +861,7 @@ mod tests {
                 "TimesUp",
                 r"C:\Tools\times-up.exe",
             ),
-            open_config: Box::new(|_| Ok(())),
+            open_settings: Box::new(|_| Ok(())),
         };
         let mut app = App::with_services(Config::default(), None, services);
         let message = app
@@ -889,7 +899,9 @@ mod tests {
     const H: i32 = 40;
 
     fn brk_of(app: &App, index: usize) -> Break {
-        app.store.schedule().classes(MON)[index].brk.unwrap()
+        app.store.borrow().schedule().classes(MON)[index]
+            .brk
+            .unwrap()
     }
 
     fn minutes(b: Break) -> (u32, u32) {
@@ -933,13 +945,13 @@ mod tests {
         // Orange of block 1 begins 10 minutes before its end (at 35 minutes = 350 px).
         assert!(app.grab_at(MON, NOW, 350, W, H));
         app.move_grab(20); // 2 minutes later: 8 minutes of orange left
-        let w = app.store.schedule().classes(MON)[0].warnings[0];
+        let w = app.store.borrow().schedule().classes(MON)[0].warnings[0];
         assert_eq!((w.orange / MINUTE, w.red / MINUTE), (8, 5));
         // And the red boundary of the second block (at 95 minutes = 950 px).
         app.grab_end();
         assert!(app.grab_at(MON, NOW, 950, W, H));
         app.move_grab(-20);
-        let w = app.store.schedule().classes(MON)[0].warnings[1];
+        let w = app.store.borrow().schedule().classes(MON)[0].warnings[1];
         assert_eq!((w.orange / MINUTE, w.red / MINUTE), (10, 7));
     }
 
@@ -1057,7 +1069,7 @@ mod tests {
         // 10:00 is 60 minutes in: now inside the moved break.
         let mut canvas = Canvas::new(1000, 40);
         assert!(app.draw_at(&mut canvas, MON, hm(10, 0)));
-        let state = app.store.schedule().state(MON, hm(10, 0));
+        let state = app.store.borrow().schedule().state(MON, hm(10, 0));
         assert!(matches!(state, State::Break { .. }), "{state:?}");
         assert!(app.menu_state().can_save_default);
     }
@@ -1147,12 +1159,12 @@ mod tests {
         assert!(app.grab_at(MON, NOW, 450, W, H));
         app.move_grab(20); // 2 minutes later: 8 minutes of orange
         app.grab_end();
-        let edited = app.store.schedule().classes(MON)[0].clone();
+        let edited = app.store.borrow().schedule().classes(MON)[0].clone();
 
         assert_eq!(app.run_command(Command::SaveDefault), None);
         assert!(!app.menu_state().can_save_default, "nothing left to save");
         assert_eq!(
-            app.store.schedule().classes(MON)[0],
+            app.store.borrow().schedule().classes(MON)[0],
             edited,
             "the bar keeps showing it"
         );
@@ -1178,7 +1190,7 @@ mod tests {
         // Our own save is not mistaken for an outside edit: the saved class stays as it is.
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas);
-        assert_eq!(app.store.schedule().classes(MON)[0], edited);
+        assert_eq!(app.store.borrow().schedule().classes(MON)[0], edited);
         let _ = fs::remove_dir_all(&dir);
     }
 

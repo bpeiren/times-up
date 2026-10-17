@@ -9,18 +9,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::PCWSTR;
 
 use super::wide;
-
-pub const LABEL_SAVE_DEFAULT: &str = "Save as default for this slot";
-pub const LABEL_OPEN_CONFIG: &str = "Open config (Notepad)";
-pub const LABEL_AUTOSTART: &str = "Start with Windows";
-pub const LABEL_QUIT: &str = "Quit";
+use crate::strings::{LABEL_AUTOSTART, LABEL_QUIT, LABEL_SAVE_DEFAULT, LABEL_SETTINGS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Store the break and warning thresholds of the current class as its defaults.
     SaveDefault,
-    /// Open `times-up.toml` in Notepad.
-    OpenConfig,
+    /// Open the Settings window.
+    Settings,
     /// Add or remove the "start with Windows" entry.
     ToggleAutostart,
     Quit,
@@ -29,7 +25,7 @@ pub enum Command {
 impl Command {
     const fn id(self) -> usize {
         match self {
-            Command::OpenConfig => 1,
+            Command::Settings => 1,
             Command::ToggleAutostart => 2,
             Command::Quit => 3,
             Command::SaveDefault => 4,
@@ -38,7 +34,7 @@ impl Command {
 
     pub const fn from_id(id: usize) -> Option<Self> {
         match id {
-            1 => Some(Command::OpenConfig),
+            1 => Some(Command::Settings),
             2 => Some(Command::ToggleAutostart),
             3 => Some(Command::Quit),
             4 => Some(Command::SaveDefault),
@@ -84,7 +80,7 @@ pub fn build(state: MenuState) -> Option<HMENU> {
         };
         let built = add(save, Some(Command::SaveDefault), LABEL_SAVE_DEFAULT)
             .and_then(|()| add(MF_SEPARATOR, None, ""))
-            .and_then(|()| add(MF_STRING, Some(Command::OpenConfig), LABEL_OPEN_CONFIG))
+            .and_then(|()| add(MF_STRING, Some(Command::Settings), LABEL_SETTINGS))
             .and_then(|()| add(auto, Some(Command::ToggleAutostart), LABEL_AUTOSTART))
             .and_then(|()| add(MF_SEPARATOR, None, ""))
             .and_then(|()| add(MF_STRING, Some(Command::Quit), LABEL_QUIT));
@@ -151,14 +147,14 @@ mod tests {
     }
 
     #[test]
-    fn menu_has_save_open_config_autostart_and_quit() {
+    fn menu_has_save_settings_autostart_and_quit() {
         let menu = build(MenuState::default()).expect("menu");
         // SAFETY: reading a menu we built.
         let count = unsafe { GetMenuItemCount(Some(menu)) };
         assert_eq!(count, 6, "four entries and two separators");
         assert_eq!(label(menu, 0), LABEL_SAVE_DEFAULT);
         assert_eq!(state(menu, 1) & MF_SEPARATOR.0, MF_SEPARATOR.0);
-        assert_eq!(label(menu, 2), LABEL_OPEN_CONFIG);
+        assert_eq!(label(menu, 2), LABEL_SETTINGS);
         assert_eq!(label(menu, 3), LABEL_AUTOSTART);
         assert_eq!(state(menu, 4) & MF_SEPARATOR.0, MF_SEPARATOR.0);
         assert_eq!(label(menu, 5), LABEL_QUIT);
@@ -210,7 +206,7 @@ mod tests {
     fn command_ids_round_trip() {
         for cmd in [
             Command::SaveDefault,
-            Command::OpenConfig,
+            Command::Settings,
             Command::ToggleAutostart,
             Command::Quit,
         ] {

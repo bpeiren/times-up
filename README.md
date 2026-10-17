@@ -27,8 +27,10 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   drag, a small time at the bottom of the bar shows when that zone starts (`09:35`) or when the
   break starts and ends (`09:45-09:55`). The change is forgotten when the class is over, unless you
   right-click and choose *Save as default for this slot*.
-- Right-click the bar or click the tray icon: *Save as default for this slot*, *Open config
-  (Notepad)*, *Start with Windows*, *Quit*.
+- Right-click the bar or click the tray icon: *Save as default for this slot*, *Settings...*,
+  *Start with Windows*, *Quit*. *Settings...* opens a window of its own (one at a time, resizable;
+  its place and size are remembered). Until it has more to offer, edit `times-up.toml` in any text
+  editor.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be
@@ -122,6 +124,9 @@ logic.
 | `editing` | Dragging the break and the warning zones, with clamping |
 | `win::window` | The borderless, transparent, always-on-top window and its mouse handling |
 | `win::app` | Start-up, the per-second work, saving, menu commands |
+| `store` | The one owner of the loaded settings: the file poll and every edit go through it, and views redraw when its revision changes |
+| `settings`, `strings` | The Settings window's layout and frame as plain geometry; every UI text in one place |
+| `win::settings_window` | The Settings window: a resizable window whose contents we draw |
 | `win::menu`, `win::autostart` | The right-click menu and the *Start with Windows* registry entry |
 | `icon`, `win::tray` | The notification-area icon, drawn at run time, and its click handling |
 | `win::text`, `win::monitors`, `win::surface` | GDI text, monitor areas, showing the canvas |
