@@ -86,8 +86,8 @@ file is not touched, so it cannot go stale, and pull requests do not conflict ov
   generated notes before anything is committed, unless `-Unattended` is given (for automation; do
   not use it without being asked to). If it stops, its help (`Get-Help .\scripts\release.ps1`)
   says what to do at each step. Never move a tag that was pushed.
-- CI: `.github/workflows/ci.yml` runs on every pull request and push to main (Windows runner):
-  `cargo fmt --check`, clippy `-D warnings`, `cargo test` (`scripts/ci-tests.ps1`: the `win::` window
+- CI: `.github/workflows/ci.yml` runs on every pull request and push to main (Windows runner) as parallel
+  jobs lint, test, build and scripts: `cargo fmt --check`, clippy `-D warnings`, `cargo test` (`scripts/ci-tests.ps1`: the `win::` window
   and tray tests are skipped with a visible warning only if the runner has no interactive desktop),
   the release build with the exe dependency check, and `scripts/release.tests.ps1`. Workflows use
   `contents: read` (the release job alone has `contents: write`), pin actions to a full commit SHA,

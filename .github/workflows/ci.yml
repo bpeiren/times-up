@@ -1,4 +1,6 @@
 # Checks every pull request and every push to main. Nothing is published from here.
+# Lint, test, build and the script tests are separate jobs so they run in parallel and a failure
+# says at a glance which kind of check broke.
 name: CI
 
 on:
@@ -17,7 +19,37 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  lint:
+    name: Lint (fmt, clippy)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-lint-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
+          restore-keys: cargo-lint-${{ runner.os }}-
+
+      - name: Toolchain
+        shell: pwsh
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    name: Test
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -32,22 +64,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
+          restore-keys: cargo-test-${{ runner.os }}-
 
       - name: Toolchain
         shell: pwsh
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
-          rustc --version
-          cargo --version
-
-      - name: cargo fmt --check
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: rustup toolchain install stable --profile minimal
 
       # The window and tray tests create real windows and notification icons. A hosted runner may
       # not give them an interactive desktop; scripts/ci-tests.ps1 says so and skips exactly those
@@ -56,16 +78,50 @@ jobs:
         shell: pwsh
         run: ./scripts/ci-tests.ps1
 
+  build:
+    name: Build (release exe)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
+          restore-keys: cargo-build-${{ runner.os }}-
+
+      - name: Toolchain
+        shell: pwsh
+        run: rustup toolchain install stable --profile minimal
+
       # The release build is also what the release workflow packages, so a pull request that would
       # break it (or make the exe need the C++ runtime) is caught before it is merged.
-      - name: Release build and exe dependency check
+      - name: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Exe dependency check
         shell: pwsh
         run: |
-          cargo build --release --locked
           $env:TIMES_UP_EXE = (Resolve-Path target/release/times-up.exe)
           cargo test --locked --test exe_dependencies
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Release scripts tests
+  scripts:
+    name: Release script tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: scripts/release.tests.ps1
         shell: pwsh
         run: ./scripts/release.tests.ps1
