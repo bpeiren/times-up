@@ -27,7 +27,7 @@ pub enum Section {
 
 impl Section {
     /// In tab order.
-    pub const ALL: [Section; 2] = [Section::Timetable, Section::General];
+    pub const ALL: [Section; 2] = [Section::General, Section::Timetable];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn there_are_two_sections_the_timetable_first() {
-        assert_eq!(Section::ALL, [Section::Timetable, Section::General]);
+        assert_eq!(Section::ALL, [Section::General, Section::Timetable]);
         assert_eq!(Section::Timetable.label(), "Timetable");
         assert_eq!(Section::General.label(), "General");
     }
@@ -157,8 +157,8 @@ mod tests {
         assert_eq!(
             l.tabs,
             vec![
-                (Section::Timetable, Rect::new(0, 0, 130, 40)),
-                (Section::General, Rect::new(130, 0, 130, 40)),
+                (Section::General, Rect::new(0, 0, 130, 40)),
+                (Section::Timetable, Rect::new(130, 0, 130, 40)),
             ]
         );
     }
@@ -179,10 +179,10 @@ mod tests {
     #[test]
     fn tabs_are_hit_inside_their_rectangle_only() {
         let l = layout(800, 500, 1.0);
-        assert_eq!(l.tab_at(0, 0), Some(Section::Timetable));
-        assert_eq!(l.tab_at(129, 39), Some(Section::Timetable));
-        assert_eq!(l.tab_at(130, 10), Some(Section::General));
-        assert_eq!(l.tab_at(259, 39), Some(Section::General));
+        assert_eq!(l.tab_at(0, 0), Some(Section::General));
+        assert_eq!(l.tab_at(129, 39), Some(Section::General));
+        assert_eq!(l.tab_at(130, 10), Some(Section::Timetable));
+        assert_eq!(l.tab_at(259, 39), Some(Section::Timetable));
         assert_eq!(l.tab_at(260, 10), None);
         assert_eq!(l.tab_at(10, 40), None);
         assert_eq!(l.tab_at(-1, 10), None);
@@ -248,7 +248,7 @@ mod tests {
         let accent = Rgba::rgb(10, 200, 30);
         let l = layout(400, 200, 1.0);
         let mut canvas = Canvas::new(400, 200);
-        paint_frame(&mut canvas, &l, Section::Timetable, accent);
+        paint_frame(&mut canvas, &l, Section::General, accent);
         assert!(canvas.pixels().iter().all(|p| p >> 24 == 0xff));
         assert_eq!(canvas.pixel(50, 38), 0xff0a_c81e, "underline of the tab");
         assert_ne!(canvas.pixel(200, 38), canvas.pixel(50, 38), "only that tab");

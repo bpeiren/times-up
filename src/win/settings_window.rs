@@ -977,8 +977,10 @@ mod tests {
     fn clicking_the_timetable_tab_keeps_the_timetable_section() {
         let dir = Scratch::new("tab", "");
         let hwnd = open(dir.store()).unwrap();
-        let lparam = LPARAM((10 << 16) | 10);
         // SAFETY: on the window's thread.
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
+        let lparam = LPARAM((((tab.y + 5) << 16) | (tab.x + 5)) as isize);
+        // SAFETY: as above.
         unsafe {
             SendMessageW(hwnd, WM_LBUTTONDOWN, None, Some(lparam));
             assert_eq!(state_of(hwnd).unwrap().section, Section::Timetable);
@@ -1439,7 +1441,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let store = dir.store();
         let hwnd = open_with(store.clone(), fake_clock_now, fake_picker).unwrap();
         // SAFETY: on the window's thread.
-        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[0].1;
         click(hwnd, tab.x + 5, tab.y + 5);
         (store, hwnd)
     }
@@ -1465,7 +1467,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let section = || unsafe { state_of(hwnd) }.unwrap().section;
         assert_eq!(section(), Section::General);
         // SAFETY: as above.
-        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[0].1;
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
         click(hwnd, tab.x + 5, tab.y + 5);
         assert_eq!(section(), Section::Timetable);
         close(hwnd);
@@ -1569,7 +1571,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let hwnd = open_with(store.clone(), fake_clock_now, fake_picker).unwrap();
         select_monday(hwnd);
         // SAFETY: on the window's thread.
-        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[0].1;
         click(hwnd, tab.x + 5, tab.y + 5);
         key(hwnd, 0x2e);
         assert_eq!(store.borrow().schedule().classes(Weekday::Mon).len(), 1);
