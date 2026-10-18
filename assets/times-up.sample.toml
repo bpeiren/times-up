@@ -5,13 +5,13 @@
 lead_in_minutes = 5          # the bar appears this long before a class starts
 linger_seconds = 10          # ...and stays this long after the last class ends
 default_break_minutes = 10   # break in the middle of classes of 100 minutes or more
-orange_minutes = 10          # the bar turns orange this long before the end of a block
-red_minutes = 5              # ...and red this long before the end
+warning_minutes = 10         # the bar turns to the warning colour this long before the end of a block
+final_minutes = 5            # ...and to the final colour this long before the end
 
 [colors]                     # #RRGGBB or #RRGGBBAA
-green = "#2ecc71"
-orange = "#f39c12"
-red = "#e74c3c"
+lesson = "#2ecc71"
+warning = "#f39c12"
+final = "#e74c3c"
 break = "#bdc3c7"            # the break between two blocks
 track = "#33333399"          # the part of the bar that is not filled yet
 text = "#ffffff"
@@ -30,7 +30,7 @@ text = "#ffffff"
 
 # One section per weekday (monday ... friday). Times are 24-hour HH:MM.
 # A class of 100 minutes or more gets a break in the middle. Optional per class, in minutes:
-#   break_start = 45, break_len = 10 (0 = no break), orange = [10, 10], red = [5, 5]  (one value per block)
+#   break_start = 45, break_len = 10 (0 = no break), warning = [10, 10], final = [5, 5]  (one value per block)
 [monday]
 classes = [
   { start = "08:30", end = "09:20" },

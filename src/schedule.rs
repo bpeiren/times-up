@@ -9,8 +9,8 @@ use std::fmt;
 pub type Secs = u32;
 
 pub const MINUTE: Secs = 60;
-pub const DEFAULT_ORANGE: Secs = 10 * MINUTE;
-pub const DEFAULT_RED: Secs = 5 * MINUTE;
+pub const DEFAULT_WARNING: Secs = 10 * MINUTE;
+pub const DEFAULT_FINAL: Secs = 5 * MINUTE;
 pub const DEFAULT_BREAK_LEN: Secs = 10 * MINUTE;
 pub const DEFAULT_LEAD_IN: Secs = 5 * MINUTE;
 pub const DEFAULT_LINGER: Secs = 10;
@@ -56,9 +56,9 @@ impl Weekday {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
-    Green,
-    Orange,
-    Red,
+    Lesson,
+    Warning,
+    Final,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,8 +67,8 @@ pub enum ScheduleError {
     EmptyClass,
     /// A break must leave a non-empty block on both sides.
     BreakOutsideClass,
-    /// The red zone must not be longer than the orange zone.
-    RedLongerThanOrange,
+    /// The final zone must not be longer than the warning zone.
+    FinalLongerThanWarning,
     /// Two classes overlap (back-to-back is fine).
     Overlap,
 }
@@ -78,7 +78,9 @@ impl fmt::Display for ScheduleError {
         f.write_str(match self {
             Self::EmptyClass => "a class must end after it starts",
             Self::BreakOutsideClass => "a break must lie strictly inside the class",
-            Self::RedLongerThanOrange => "the red zone must not be longer than the orange zone",
+            Self::FinalLongerThanWarning => {
+                "the final zone must not be longer than the warning zone"
+            }
             Self::Overlap => "classes must not overlap",
         })
     }
@@ -86,39 +88,39 @@ impl fmt::Display for ScheduleError {
 
 impl std::error::Error for ScheduleError {}
 
-/// How long before the end of a block it turns orange and red.
+/// How long before the end of a block it changes to the warning and final zones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Warnings {
-    pub orange: Secs,
-    pub red: Secs,
+    pub warning: Secs,
+    pub final_: Secs,
 }
 
 impl Default for Warnings {
     fn default() -> Self {
         Self {
-            orange: DEFAULT_ORANGE,
-            red: DEFAULT_RED,
+            warning: DEFAULT_WARNING,
+            final_: DEFAULT_FINAL,
         }
     }
 }
 
 impl Warnings {
-    pub fn new(orange: Secs, red: Secs) -> Result<Self, ScheduleError> {
-        if red > orange {
-            return Err(ScheduleError::RedLongerThanOrange);
+    pub fn new(warning: Secs, final_: Secs) -> Result<Self, ScheduleError> {
+        if final_ > warning {
+            return Err(ScheduleError::FinalLongerThanWarning);
         }
-        Ok(Self { orange, red })
+        Ok(Self { warning, final_ })
     }
 
     /// Zone for `left` seconds remaining in a block. The thresholds are inclusive: with exactly
-    /// ten minutes left the block is already orange.
+    /// ten minutes left the block is already in the warning zone.
     pub fn zone(&self, left: Secs) -> Zone {
-        if left <= self.red {
-            Zone::Red
-        } else if left <= self.orange {
-            Zone::Orange
+        if left <= self.final_ {
+            Zone::Final
+        } else if left <= self.warning {
+            Zone::Warning
         } else {
-            Zone::Green
+            Zone::Lesson
         }
     }
 }
@@ -196,7 +198,7 @@ impl Class {
         block: usize,
         warnings: Warnings,
     ) -> Result<Self, ScheduleError> {
-        self.warnings[block.min(1)] = Warnings::new(warnings.orange, warnings.red)?;
+        self.warnings[block.min(1)] = Warnings::new(warnings.warning, warnings.final_)?;
         Ok(self)
     }
 
@@ -560,11 +562,11 @@ mod tests {
     #[test]
     fn zone_thresholds_are_inclusive() {
         let w = Warnings::default();
-        assert_eq!(w.zone(10 * MINUTE + 1), Zone::Green);
-        assert_eq!(w.zone(10 * MINUTE), Zone::Orange);
-        assert_eq!(w.zone(5 * MINUTE + 1), Zone::Orange);
-        assert_eq!(w.zone(5 * MINUTE), Zone::Red);
-        assert_eq!(w.zone(0), Zone::Red);
+        assert_eq!(w.zone(10 * MINUTE + 1), Zone::Lesson);
+        assert_eq!(w.zone(10 * MINUTE), Zone::Warning);
+        assert_eq!(w.zone(5 * MINUTE + 1), Zone::Warning);
+        assert_eq!(w.zone(5 * MINUTE), Zone::Final);
+        assert_eq!(w.zone(0), Zone::Final);
     }
 
     #[test]
@@ -572,11 +574,17 @@ mod tests {
         assert!(Warnings::new(5 * MINUTE, 5 * MINUTE).is_ok());
         assert_eq!(
             Warnings::new(5 * MINUTE, 6 * MINUTE),
-            Err(ScheduleError::RedLongerThanOrange)
+            Err(ScheduleError::FinalLongerThanWarning)
         );
         assert_eq!(
-            class(hm(9, 0), hm(9, 50)).with_warnings(0, Warnings { orange: 1, red: 2 }),
-            Err(ScheduleError::RedLongerThanOrange)
+            class(hm(9, 0), hm(9, 50)).with_warnings(
+                0,
+                Warnings {
+                    warning: 1,
+                    final_: 2
+                }
+            ),
+            Err(ScheduleError::FinalLongerThanWarning)
         );
     }
 
@@ -590,7 +598,7 @@ mod tests {
         assert!(matches!(
             s.state(MON, hm(9, 0)),
             State::Running {
-                zone: Zone::Orange,
+                zone: Zone::Warning,
                 ..
             }
         ));
@@ -602,23 +610,26 @@ mod tests {
     fn single_class_walks_through_the_zones() {
         let s = single();
         let at = |m: u32, sec: u32| s.state(MON, hm(9, m) + sec);
-        assert_eq!(at(0, 0), running(0, 0, 0, 50 * MINUTE, Zone::Green));
-        // 10:01 left -> green, 10:00 left -> orange.
+        assert_eq!(at(0, 0), running(0, 0, 0, 50 * MINUTE, Zone::Lesson));
+        // 10:01 left -> lesson, 10:00 left -> warning.
         assert_eq!(
             at(39, 59),
-            running(0, 39 * MINUTE + 59, 0, 10 * MINUTE + 1, Zone::Green)
+            running(0, 39 * MINUTE + 59, 0, 10 * MINUTE + 1, Zone::Lesson)
         );
         assert_eq!(
             at(40, 0),
-            running(0, 40 * MINUTE, 0, 10 * MINUTE, Zone::Orange)
+            running(0, 40 * MINUTE, 0, 10 * MINUTE, Zone::Warning)
         );
-        // 5:01 left -> orange, 5:00 left -> red.
+        // 5:01 left -> warning, 5:00 left -> final.
         assert_eq!(
             at(44, 59),
-            running(0, 44 * MINUTE + 59, 0, 5 * MINUTE + 1, Zone::Orange)
+            running(0, 44 * MINUTE + 59, 0, 5 * MINUTE + 1, Zone::Warning)
         );
-        assert_eq!(at(45, 0), running(0, 45 * MINUTE, 0, 5 * MINUTE, Zone::Red));
-        assert_eq!(at(49, 59), running(0, 49 * MINUTE + 59, 0, 1, Zone::Red));
+        assert_eq!(
+            at(45, 0),
+            running(0, 45 * MINUTE, 0, 5 * MINUTE, Zone::Final)
+        );
+        assert_eq!(at(49, 59), running(0, 49 * MINUTE + 59, 0, 1, Zone::Final));
     }
 
     #[test]
@@ -711,18 +722,21 @@ mod tests {
     fn two_hour_class_has_two_blocks_and_a_break() {
         let s = double();
         let at = |m: u32, sec: u32| s.state(MON, hm(9, 0) + m * MINUTE + sec);
-        // Block 1 (45 min): orange in its last 10 minutes, red in its last 5.
-        assert_eq!(at(0, 0), running(0, 0, 0, 45 * MINUTE, Zone::Green));
+        // Block 1 (45 min): warning in its last 10 minutes, final in its last 5.
+        assert_eq!(at(0, 0), running(0, 0, 0, 45 * MINUTE, Zone::Lesson));
         assert_eq!(
             at(34, 59),
-            running(0, 34 * MINUTE + 59, 0, 10 * MINUTE + 1, Zone::Green)
+            running(0, 34 * MINUTE + 59, 0, 10 * MINUTE + 1, Zone::Lesson)
         );
         assert_eq!(
             at(35, 0),
-            running(0, 35 * MINUTE, 0, 10 * MINUTE, Zone::Orange)
+            running(0, 35 * MINUTE, 0, 10 * MINUTE, Zone::Warning)
         );
-        assert_eq!(at(40, 0), running(0, 40 * MINUTE, 0, 5 * MINUTE, Zone::Red));
-        assert_eq!(at(44, 59), running(0, 44 * MINUTE + 59, 0, 1, Zone::Red));
+        assert_eq!(
+            at(40, 0),
+            running(0, 40 * MINUTE, 0, 5 * MINUTE, Zone::Final)
+        );
+        assert_eq!(at(44, 59), running(0, 44 * MINUTE + 59, 0, 1, Zone::Final));
         // Break (10 min).
         assert_eq!(
             at(45, 0),
@@ -740,17 +754,20 @@ mod tests {
                 left: 1
             }
         );
-        // Block 2 starts green again with its own zones.
+        // Block 2 starts in the lesson zone again with its own zones.
         assert_eq!(
             at(55, 0),
-            running(0, 55 * MINUTE, 1, 45 * MINUTE, Zone::Green)
+            running(0, 55 * MINUTE, 1, 45 * MINUTE, Zone::Lesson)
         );
         assert_eq!(
             at(90, 0),
-            running(0, 90 * MINUTE, 1, 10 * MINUTE, Zone::Orange)
+            running(0, 90 * MINUTE, 1, 10 * MINUTE, Zone::Warning)
         );
-        assert_eq!(at(95, 0), running(0, 95 * MINUTE, 1, 5 * MINUTE, Zone::Red));
-        assert_eq!(at(99, 59), running(0, 99 * MINUTE + 59, 1, 1, Zone::Red));
+        assert_eq!(
+            at(95, 0),
+            running(0, 95 * MINUTE, 1, 5 * MINUTE, Zone::Final)
+        );
+        assert_eq!(at(99, 59), running(0, 99 * MINUTE + 59, 1, 1, Zone::Final));
         assert_eq!(at(100, 0), State::Ended { class: 0 });
     }
 
@@ -761,12 +778,12 @@ mod tests {
             .with_warnings(0, Warnings::new(2 * MINUTE, MINUTE).unwrap())
             .unwrap();
         s.set_day(MON, vec![c]).unwrap();
-        // Block 1: orange only in the last 2 minutes.
+        // Block 1: warning only in the last 2 minutes.
         assert!(matches!(
             s.state(MON, hm(9, 40)),
             State::Running {
                 block: 0,
-                zone: Zone::Green,
+                zone: Zone::Lesson,
                 ..
             }
         ));
@@ -774,7 +791,7 @@ mod tests {
             s.state(MON, hm(9, 43)),
             State::Running {
                 block: 0,
-                zone: Zone::Orange,
+                zone: Zone::Warning,
                 ..
             }
         ));
@@ -783,7 +800,7 @@ mod tests {
             s.state(MON, hm(10, 30)),
             State::Running {
                 block: 1,
-                zone: Zone::Orange,
+                zone: Zone::Warning,
                 ..
             }
         ));
@@ -808,7 +825,7 @@ mod tests {
         );
         assert_eq!(
             s.state(MON, hm(9, 50)),
-            running(0, 50 * MINUTE, 1, 50 * MINUTE, Zone::Green)
+            running(0, 50 * MINUTE, 1, 50 * MINUTE, Zone::Lesson)
         );
     }
 
@@ -829,7 +846,7 @@ mod tests {
         ));
         assert_eq!(
             s.state(MON, hm(9, 50)),
-            running(1, 0, 0, 50 * MINUTE, Zone::Green)
+            running(1, 0, 0, 50 * MINUTE, Zone::Lesson)
         );
         // During the first class, nothing hides the window either.
         assert!(s.state(MON, hm(9, 30)).is_visible());
@@ -854,7 +871,7 @@ mod tests {
         );
         assert_eq!(
             s.state(MON, hm(9, 55)),
-            running(1, 0, 0, 50 * MINUTE, Zone::Green)
+            running(1, 0, 0, 50 * MINUTE, Zone::Lesson)
         );
     }
 

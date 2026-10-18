@@ -344,13 +344,13 @@ mod tests {
         // Someone edits another part of the file behind our back.
         fs::write(
             dir.file(),
-            format!("{SAMPLE}\n[colors]\ngreen = \"#010203\"\n"),
+            format!("{SAMPLE}\n[colors]\nlesson = \"#010203\"\n"),
         )
         .unwrap();
         store
             .set_day(Weekday::Mon, vec![class((9, 0), (9, 50))])
             .unwrap();
-        assert!(dir.text().contains("green = \"#010203\""));
+        assert!(dir.text().contains("lesson = \"#010203\""));
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
 
     // ---- general settings and colours ----
 
-    const GENERAL: &str = "# top\n[general]\nlead_in_minutes = 5   # before\nlinger_seconds = 10\n\n[colors]\ngreen = \"#2ecc71\" # nice\n\n[monday]\nclasses = [\n  { start = \"09:00\", end = \"10:40\" },\n  { start = \"11:00\", end = \"11:50\", orange = [7, 7], red = [3, 3] },\n]\n";
+    const GENERAL: &str = "# top\n[general]\nlead_in_minutes = 5   # before\nlinger_seconds = 10\n\n[colors]\ngreen = \"#2ecc71\" # nice\n\n[monday]\nclasses = [\n  { start = \"09:00\", end = \"10:40\" },\n  { start = \"11:00\", end = \"11:50\", warning = [7, 7], final = [3, 3] },\n]\n";
 
     fn general(store: &Store) -> General {
         store.config().general()
@@ -538,11 +538,13 @@ mod tests {
         assert!(text.contains("lead_in_minutes = 8   # before"), "{text}");
         assert!(text.contains("linger_seconds = 25"));
         assert!(text.contains("default_break_minutes = 15"));
-        assert!(text.contains("orange_minutes = 12") && text.contains("red_minutes = 4"));
+        assert!(text.contains("warning_minutes = 12") && text.contains("final_minutes = 4"));
         assert!(text.starts_with("# top\n"));
         assert!(text.contains("green = \"#2ecc71\" # nice"));
         assert!(
-            text.contains("{ start = \"11:00\", end = \"11:50\", orange = [7, 7], red = [3, 3] }")
+            text.contains(
+                "{ start = \"11:00\", end = \"11:50\", warning = [7, 7], final = [3, 3] }"
+            )
         );
         assert_eq!(general(&store), g);
         assert_eq!(store.revision(), 1);
@@ -564,9 +566,9 @@ mod tests {
             20 * MINUTE,
             "no own break: the default"
         );
-        assert_eq!(classes[0].warnings[0].orange, 15 * MINUTE);
+        assert_eq!(classes[0].warnings[0].warning, 15 * MINUTE);
         assert_eq!(
-            classes[1].warnings[0].orange,
+            classes[1].warnings[0].warning,
             7 * MINUTE,
             "its own thresholds stay"
         );
@@ -598,15 +600,15 @@ mod tests {
             },
             General {
                 warnings: crate::schedule::Warnings {
-                    orange: 3 * MINUTE,
-                    red: 5 * MINUTE,
+                    warning: 3 * MINUTE,
+                    final_: 5 * MINUTE,
                 },
                 ..good
             },
             General {
                 warnings: crate::schedule::Warnings {
-                    orange: 61 * MINUTE,
-                    red: 1,
+                    warning: 61 * MINUTE,
+                    final_: 1,
                 },
                 ..good
             },
@@ -644,19 +646,76 @@ mod tests {
         ));
     }
 
+    const OLD_KEYS: &str = "[general]\norange_minutes = 8   # warm\nred_minutes = 2\n\n[colors]\ngreen = \"#2ecc71\" # nice\norange = \"#f39c12\"\nred = \"#e74c3c\"\n\n[monday]\nclasses = [\n  { start = \"09:00\", end = \"09:50\", orange = 7, red = 3 },\n]\n";
+
+    #[test]
+    fn writing_the_general_values_into_an_old_file_uses_the_new_keys() {
+        let dir = Scratch::new("old-general", OLD_KEYS);
+        let mut store = dir.store();
+        let mut g = general(&store);
+        g.warnings = crate::schedule::Warnings::new(12 * MINUTE, 4 * MINUTE).unwrap();
+        store.set_general(g).unwrap();
+        let text = dir.text();
+        assert!(text.contains("warning_minutes = 12   # warm"), "{text}");
+        assert!(text.contains("final_minutes = 4"), "{text}");
+        assert!(
+            !text.contains("orange_minutes") && !text.contains("red_minutes"),
+            "{text}"
+        );
+        assert_eq!(general(&dir.store()), g);
+    }
+
+    #[test]
+    fn writing_the_colours_into_an_old_file_uses_the_new_keys() {
+        let dir = Scratch::new("old-colors", OLD_KEYS);
+        let mut store = dir.store();
+        let mut c = store.config().colors;
+        c.warning = Rgba::rgb(1, 2, 3);
+        store.set_colors(c).unwrap();
+        let text = dir.text();
+        for key in ["lesson", "warning", "final"] {
+            assert!(text.contains(&format!("{key} = \"#")), "{key} in {text}");
+        }
+        assert!(text.contains("lesson = \"#2ecc71\" # nice"), "{text}");
+        let colors = text.split("[monday]").next().unwrap();
+        for old in ["green", "orange =", "red ="] {
+            assert!(!colors.contains(old), "{old} in {text}");
+        }
+        assert_eq!(dir.store().config().colors, c);
+    }
+
+    #[test]
+    fn editing_a_day_of_an_old_file_writes_the_new_class_keys() {
+        let dir = Scratch::new("old-day", OLD_KEYS);
+        let mut store = dir.store();
+        let mut c = store.schedule().classes(Weekday::Mon)[0].clone();
+        c.warnings[0] = crate::schedule::Warnings::new(6 * MINUTE, MINUTE).unwrap();
+        store.set_day(Weekday::Mon, vec![c.clone()]).unwrap();
+        let text = dir.text();
+        assert!(
+            text.contains("warning = [6, 7]") && text.contains("final = [1, 3]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("orange = 7") && !text.contains("red = 3"),
+            "{text}"
+        );
+        assert_eq!(dir.store().schedule().classes(Weekday::Mon)[0], c);
+    }
+
     #[test]
     fn set_colors_writes_all_six_and_keeps_comments() {
         let dir = Scratch::new("colors", GENERAL);
         let mut store = dir.store();
         let mut c = store.config().colors;
-        c.green = Rgba::rgb(1, 2, 3);
+        c.lesson = Rgba::rgb(1, 2, 3);
         c.track.a = 0x40;
         store.set_colors(c).unwrap();
 
         let text = dir.text();
-        assert!(text.contains("green = \"#010203\" # nice"), "{text}");
+        assert!(text.contains("lesson = \"#010203\" # nice"), "{text}");
         assert!(text.contains("track = \"#33333340\""));
-        for key in ["orange", "red", "break", "text"] {
+        for key in ["warning", "final", "break", "text"] {
             assert!(text.contains(&format!("{key} = \"#")), "{key} in {text}");
         }
         assert_eq!(store.config().colors, c);

@@ -562,7 +562,7 @@ impl Timetable {
                     let outline = Rect::new(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4);
                     fill(canvas, outline, colors.text, 5.0);
                 }
-                fill(canvas, rect, colors.green, 4.0);
+                fill(canvas, rect, colors.lesson, 4.0);
             }
             let can_add = self.can_add(store, day);
             let plus = layout.plus[row];
@@ -1332,12 +1332,12 @@ mod tests {
             );
         }
         assert!(drawn.iter().any(|t| t == "Wednesday" || t == "Sunday"));
-        let green = store.config().colors.green;
+        let lesson = store.config().colors.lesson;
         let argb = |c: Rgba| u32::from_be_bytes([c.a, c.r, c.g, c.b]);
-        assert_eq!(canvas.pixel(x as u32, y as u32), argb(green));
+        assert_eq!(canvas.pixel(x as u32, y as u32), argb(lesson));
         let r = l.class_rect(0, &c);
         let outline = canvas.pixel((r.x - 1) as u32, y as u32);
-        assert_ne!(outline, argb(green));
+        assert_ne!(outline, argb(lesson));
 
         press_at(&mut view, &mut store, x, y);
         let l = lay(&view, &store);

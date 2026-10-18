@@ -37,9 +37,9 @@ const ERROR: Rgba = Rgba::rgb(0xff, 0x8a, 0x80);
 /// One of the six colours of the bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
-    Green,
-    Orange,
-    Red,
+    Lesson,
+    Warning,
+    Final,
     Break,
     Track,
     Text,
@@ -47,9 +47,9 @@ pub enum Slot {
 
 impl Slot {
     pub const ALL: [Slot; 6] = [
-        Slot::Green,
-        Slot::Orange,
-        Slot::Red,
+        Slot::Lesson,
+        Slot::Warning,
+        Slot::Final,
         Slot::Break,
         Slot::Track,
         Slot::Text,
@@ -57,9 +57,9 @@ impl Slot {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Slot::Green => strings::COLOR_GREEN,
-            Slot::Orange => strings::COLOR_ORANGE,
-            Slot::Red => strings::COLOR_RED,
+            Slot::Lesson => strings::COLOR_LESSON,
+            Slot::Warning => strings::COLOR_WARNING,
+            Slot::Final => strings::COLOR_FINAL,
             Slot::Break => strings::COLOR_BREAK,
             Slot::Track => strings::COLOR_TRACK,
             Slot::Text => strings::COLOR_TEXT,
@@ -68,9 +68,9 @@ impl Slot {
 
     pub fn get(self, colors: &Colors) -> Rgba {
         match self {
-            Slot::Green => colors.green,
-            Slot::Orange => colors.orange,
-            Slot::Red => colors.red,
+            Slot::Lesson => colors.lesson,
+            Slot::Warning => colors.warning,
+            Slot::Final => colors.final_,
             Slot::Break => colors.break_gap,
             Slot::Track => colors.track,
             Slot::Text => colors.text,
@@ -79,9 +79,9 @@ impl Slot {
 
     pub fn set(self, colors: &mut Colors, color: Rgba) {
         match self {
-            Slot::Green => colors.green = color,
-            Slot::Orange => colors.orange = color,
-            Slot::Red => colors.red = color,
+            Slot::Lesson => colors.lesson = color,
+            Slot::Warning => colors.warning = color,
+            Slot::Final => colors.final_ = color,
             Slot::Break => colors.break_gap = color,
             Slot::Track => colors.track = color,
             Slot::Text => colors.text = color,
@@ -95,8 +95,8 @@ pub enum Field {
     LeadIn,
     Linger,
     DefaultBreak,
-    Orange,
-    Red,
+    Warning,
+    Final,
 }
 
 impl Field {
@@ -104,8 +104,8 @@ impl Field {
         Field::LeadIn,
         Field::Linger,
         Field::DefaultBreak,
-        Field::Orange,
-        Field::Red,
+        Field::Warning,
+        Field::Final,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -113,8 +113,8 @@ impl Field {
             Field::LeadIn => strings::FIELD_LEAD_IN,
             Field::Linger => strings::FIELD_LINGER,
             Field::DefaultBreak => strings::FIELD_BREAK,
-            Field::Orange => strings::FIELD_ORANGE,
-            Field::Red => strings::FIELD_RED,
+            Field::Warning => strings::FIELD_WARNING,
+            Field::Final => strings::FIELD_FINAL,
         }
     }
 
@@ -124,8 +124,8 @@ impl Field {
             Field::LeadIn => g.lead_in,
             Field::Linger => g.linger,
             Field::DefaultBreak => g.default_break,
-            Field::Orange => g.warnings.orange,
-            Field::Red => g.warnings.red,
+            Field::Warning => g.warnings.warning,
+            Field::Final => g.warnings.final_,
         }
     }
 
@@ -143,7 +143,7 @@ impl Field {
             Field::LeadIn => (0, General::MAX_LEAD_IN),
             Field::Linger => (0, General::MAX_LINGER),
             Field::DefaultBreak => (General::MIN_BREAK, General::MAX_BREAK),
-            Field::Orange | Field::Red => (0, General::MAX_WARNING),
+            Field::Warning | Field::Final => (0, General::MAX_WARNING),
         }
     }
 
@@ -188,8 +188,8 @@ impl Field {
             Field::LeadIn => out.lead_in = v,
             Field::Linger => out.linger = v,
             Field::DefaultBreak => out.default_break = v,
-            Field::Orange => out.warnings.orange = v,
-            Field::Red => out.warnings.red = v,
+            Field::Warning => out.warnings.warning = v,
+            Field::Final => out.warnings.final_ = v,
         }
         out.validate()?;
         Ok(out)
@@ -519,7 +519,7 @@ fn paint_stepper(
     text(canvas, value, s.value, LABEL, Align::Center);
 }
 
-/// A small bar in the chosen colours: green, orange and red, a break, more green, then the
+/// A small bar in the chosen colours: lesson, warning and final, a break, more lesson, then the
 /// part that is not filled yet, with the text colour on top.
 fn paint_preview(
     canvas: &mut Canvas,
@@ -537,11 +537,11 @@ fn paint_preview(
             0.0,
         );
     };
-    part(0.0, 0.30, colors.green, canvas);
-    part(0.30, 0.40, colors.orange, canvas);
-    part(0.40, 0.48, colors.red, canvas);
+    part(0.0, 0.30, colors.lesson, canvas);
+    part(0.30, 0.40, colors.warning, canvas);
+    part(0.40, 0.48, colors.final_, canvas);
     part(0.48, 0.56, colors.break_gap, canvas);
-    part(0.56, 0.72, colors.green, canvas);
+    part(0.56, 0.72, colors.lesson, canvas);
     text(
         canvas,
         strings::PREVIEW_TEXT,
@@ -607,13 +607,13 @@ mod tests {
             l.target_at(x, y)
         };
         assert_eq!(at(l.colors[4].swatch), Some(Target::Pick(Slot::Track)));
-        assert_eq!(at(l.colors[0].hex), Some(Target::Pick(Slot::Green)));
+        assert_eq!(at(l.colors[0].hex), Some(Target::Pick(Slot::Lesson)));
         assert_eq!(at(l.opacity.minus), Some(Target::Opacity(-1)));
         assert_eq!(at(l.opacity.plus), Some(Target::Opacity(1)));
         assert_eq!(at(l.reset), Some(Target::ResetColors));
         assert_eq!(
             at(l.fields[3].stepper.plus),
-            Some(Target::Step(Field::Orange, 1))
+            Some(Target::Step(Field::Warning, 1))
         );
         assert_eq!(
             at(l.fields[0].stepper.minus),
@@ -647,12 +647,15 @@ mod tests {
             9 * MINUTE
         );
         assert_eq!(
-            Field::Orange.stepped(&g, 1).unwrap().warnings.orange,
+            Field::Warning.stepped(&g, 1).unwrap().warnings.warning,
             11 * MINUTE
         );
-        assert_eq!(Field::Red.stepped(&g, -1).unwrap().warnings.red, 4 * MINUTE);
         assert_eq!(
-            Field::Red.stepped(&g, 1).unwrap().default_break,
+            Field::Final.stepped(&g, -1).unwrap().warnings.final_,
+            4 * MINUTE
+        );
+        assert_eq!(
+            Field::Final.stepped(&g, 1).unwrap().default_break,
             g.default_break
         );
     }
@@ -699,20 +702,20 @@ mod tests {
 
     #[test]
     fn red_cannot_pass_orange() {
-        let g = general(); // orange 10, red 5
+        let g = general(); // warning 10, final 5
         let up = General {
             warnings: Warnings {
-                orange: 10 * MINUTE,
-                red: 10 * MINUTE,
+                warning: 10 * MINUTE,
+                final_: 10 * MINUTE,
             },
             ..g
         };
-        assert!(Field::Red.stepped(&up, 1).is_err());
+        assert!(Field::Final.stepped(&up, 1).is_err());
         assert_eq!(
-            Field::Orange.stepped(&up, -1).unwrap_err(),
-            "Red must not be longer than orange"
+            Field::Warning.stepped(&up, -1).unwrap_err(),
+            "Final minutes must not be longer than warning"
         );
-        assert!(Field::Red.stepped(&g, 1).is_ok());
+        assert!(Field::Final.stepped(&g, 1).is_ok());
     }
 
     #[test]
@@ -751,7 +754,7 @@ mod tests {
         for expected in [
             "Colours",
             "Times",
-            "Green",
+            "Lesson",
             "#2ecc71",
             "#33333399",
             "60%",
@@ -771,16 +774,16 @@ mod tests {
         let row = &l.colors[0];
         assert_eq!(
             canvas.pixel((row.swatch.x + 5) as u32, (row.swatch.y + 12) as u32),
-            solid(colors.green)
+            solid(colors.lesson)
         );
         let p = l.preview;
         assert_eq!(
             canvas.pixel((p.x + 20) as u32, (p.y + 5) as u32),
-            solid(colors.green)
+            solid(colors.lesson)
         );
         assert_eq!(
             canvas.pixel((p.x + p.w * 35 / 100) as u32, (p.y + 5) as u32),
-            solid(colors.orange)
+            solid(colors.warning)
         );
     }
 
@@ -828,16 +831,19 @@ mod tests {
         );
         assert_eq!(page.message(), None);
 
-        // Orange 10 -> 5 is fine, one more would put it below red.
+        // Warning 10 -> 5 is fine, one more would put it below final.
         for _ in 0..5 {
             press_at(&mut page, &mut t.0, l.fields[3].stepper.minus);
         }
-        assert_eq!(t.0.config().general().warnings.orange, 5 * MINUTE);
+        assert_eq!(t.0.config().general().warnings.warning, 5 * MINUTE);
         assert_eq!(page.message(), None);
         let revision = t.0.revision();
         press_at(&mut page, &mut t.0, l.fields[3].stepper.minus);
-        assert_eq!(page.message(), Some("Red must not be longer than orange"));
-        assert_eq!(t.0.config().general().warnings.orange, 5 * MINUTE);
+        assert_eq!(
+            page.message(),
+            Some("Final minutes must not be longer than warning")
+        );
+        assert_eq!(t.0.config().general().warnings.warning, 5 * MINUTE);
         assert_eq!(t.0.revision(), revision, "refused: nothing was saved");
         press_at(&mut page, &mut t.0, l.fields[0].stepper.plus);
         assert_eq!(page.message(), None, "the next click clears it");
@@ -855,13 +861,13 @@ mod tests {
         assert_eq!(percent(t.0.config().colors.track.a), 50);
 
         let pick = press_at(&mut page, &mut t.0, l.colors[2].swatch);
-        assert_eq!(pick, Some((Slot::Red, Colors::default().red)));
-        page.set_color(&mut t.0, Slot::Red, Rgba::rgb(1, 2, 3));
-        assert_eq!(t.0.config().colors.red, Rgba::rgb(1, 2, 3));
+        assert_eq!(pick, Some((Slot::Final, Colors::default().final_)));
+        page.set_color(&mut t.0, Slot::Final, Rgba::rgb(1, 2, 3));
+        assert_eq!(t.0.config().colors.final_, Rgba::rgb(1, 2, 3));
         assert!(
             std::fs::read_to_string(t.0.path().unwrap())
                 .unwrap()
-                .contains("red = \"#010203\"")
+                .contains("final = \"#010203\"")
         );
 
         press_at(&mut page, &mut t.0, l.reset);
@@ -876,7 +882,7 @@ mod tests {
         press_at(&mut page, &mut store, l.fields[0].stepper.plus);
         assert!(page.message().is_some());
         assert_eq!(store.config().general().lead_in, 5 * MINUTE);
-        page.set_color(&mut store, Slot::Red, Rgba::rgb(1, 2, 3));
+        page.set_color(&mut store, Slot::Final, Rgba::rgb(1, 2, 3));
         assert_eq!(store.config().colors, Colors::default());
     }
 }

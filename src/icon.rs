@@ -21,11 +21,11 @@ pub fn tray_icon(size: u32, colors: &Colors) -> Canvas {
     let track = Rgba::rgb(0x2b, 0x31, 0x38);
     canvas.fill_rounded_rect(bar, radius, track, None);
 
-    // Green for most of the hour, then the orange and red warnings, like a class nearly over.
+    // The lesson zone for most of the hour, then the warning and final minutes, like a class nearly over.
     let zones = [
-        (0.0, 0.6, colors.green),
-        (0.6, 0.82, colors.orange),
-        (0.82, 1.0, colors.red),
+        (0.0, 0.6, colors.lesson),
+        (0.6, 0.82, colors.warning),
+        (0.82, 1.0, colors.final_),
     ];
     for (from, to, color) in zones {
         let clip = RectF::new(bar.x + bar.w * from, bar.y, bar.w * (to - from), bar.h);
@@ -64,9 +64,9 @@ mod tests {
         let c = Colors::default();
         let icon = tray_icon(64, &c);
         let y = 32;
-        assert_eq!(icon.pixel(12, y), solid(c.green), "green on the left");
-        assert_eq!(icon.pixel(45, y), solid(c.orange), "orange next");
-        assert_eq!(icon.pixel(58, y), solid(c.red), "red at the end");
+        assert_eq!(icon.pixel(12, y), solid(c.lesson), "lesson on the left");
+        assert_eq!(icon.pixel(45, y), solid(c.warning), "warning next");
+        assert_eq!(icon.pixel(58, y), solid(c.final_), "final at the end");
     }
 
     #[test]
@@ -86,18 +86,18 @@ mod tests {
         let c = Colors::default();
         let row = (0..16).map(|x| icon.pixel(x, 8)).collect::<Vec<_>>();
         assert!(
-            row.contains(&solid(c.green))
-                && row.contains(&solid(c.orange))
-                && row.contains(&solid(c.red))
+            row.contains(&solid(c.lesson))
+                && row.contains(&solid(c.warning))
+                && row.contains(&solid(c.final_))
         );
     }
 
     #[test]
     fn the_icon_follows_the_configured_colours() {
         let c = Colors {
-            green: Rgba::rgb(1, 2, 3),
+            lesson: Rgba::rgb(1, 2, 3),
             // Transparency is ignored: an icon must stay solid.
-            red: Rgba {
+            final_: Rgba {
                 r: 9,
                 g: 8,
                 b: 7,
@@ -106,7 +106,7 @@ mod tests {
             ..Colors::default()
         };
         let icon = tray_icon(64, &c);
-        assert_eq!(icon.pixel(12, 32), solid(c.green));
+        assert_eq!(icon.pixel(12, 32), solid(c.lesson));
         assert_eq!(icon.pixel(58, 32), solid(Rgba::rgb(9, 8, 7)));
     }
 }

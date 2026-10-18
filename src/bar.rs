@@ -122,8 +122,8 @@ fn segments(class: &Class) -> Vec<Segment> {
             start: share(block.start),
             end: share(block.end),
             kind: SegmentKind::Block {
-                orange_at: share(block.end - w.orange.min(block.len())),
-                red_at: share(block.end - w.red.min(block.len())),
+                orange_at: share(block.end - w.warning.min(block.len())),
+                red_at: share(block.end - w.final_.min(block.len())),
             },
         });
         if index == 0
@@ -161,7 +161,7 @@ fn with_alpha(c: Rgba, factor: f32) -> Rgba {
 }
 
 /// Draw `view` over the whole canvas: a dim track, the elapsed part filled from the left in the
-/// colour of each zone, the break in grey, and markers where the orange and red zones begin.
+/// colour of each zone, the break in grey, and markers where the warning and final zones begin.
 /// The label is not drawn here (text needs the Windows layer).
 pub fn paint(canvas: &mut Canvas, view: &BarView, colors: &Colors) {
     let (w, h) = (canvas.width() as f32, canvas.height() as f32);
@@ -195,9 +195,9 @@ pub fn paint(canvas: &mut Canvas, view: &BarView, colors: &Colors) {
             }
             SegmentKind::Block { orange_at, red_at } => {
                 let (xo, xr) = (orange_at * w, red_at * w);
-                fill(canvas, x0, xo.min(progress_x), colors.green);
-                fill(canvas, xo, xr.min(progress_x), colors.orange);
-                fill(canvas, xr, x1.min(progress_x), colors.red);
+                fill(canvas, x0, xo.min(progress_x), colors.lesson);
+                fill(canvas, xo, xr.min(progress_x), colors.warning);
+                fill(canvas, xr, x1.min(progress_x), colors.final_);
             }
         }
     }
@@ -206,7 +206,7 @@ pub fn paint(canvas: &mut Canvas, view: &BarView, colors: &Colors) {
     let marker_width = (h / 20.0).max(1.0);
     for seg in &view.segments {
         if let SegmentKind::Block { orange_at, red_at } = seg.kind {
-            for (at, color) in [(orange_at, colors.orange), (red_at, colors.red)] {
+            for (at, color) in [(orange_at, colors.warning), (red_at, colors.final_)] {
                 let x = at * w;
                 if x > progress_x && at > seg.start && at < seg.end {
                     let rect = RectF::new(x - marker_width / 2.0, h * 0.2, marker_width, h * 0.6);
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(v.segments.len(), 1);
         let seg = v.segments[0];
         assert!(close(seg.start, 0.0) && close(seg.end, 1.0));
-        // 50 minute block: orange for the last 10 minutes, red for the last 5.
+        // 50 minute block: warning for the last 10 minutes, final for the last 5.
         assert_eq!(
             seg.kind,
             SegmentKind::Block {
@@ -461,17 +461,17 @@ mod tests {
         let c = painted(&single(), hm(9, 0));
         let track = colors().track;
         assert_eq!(alpha(&c, 400), u32::from(track.a), "track alpha");
-        assert_ne!(c.pixel(400, 10), solid(colors().green));
-        // Markers where orange (80%) and red (90%) begin, in those colours.
-        let orange = c.pixel(800, H / 2);
-        let red = c.pixel(900, H / 2);
-        assert!(orange >> 24 > u32::from(track.a), "orange marker visible");
+        assert_ne!(c.pixel(400, 10), solid(colors().lesson));
+        // Markers where warning (80%) and final (90%) begin, in those colours.
+        let warning = c.pixel(800, H / 2);
+        let final_ = c.pixel(900, H / 2);
+        assert!(warning >> 24 > u32::from(track.a), "warning marker visible");
         assert!(
-            (orange >> 16 & 0xff) > (orange & 0xff),
-            "orange marker is warm"
+            (warning >> 16 & 0xff) > (warning & 0xff),
+            "warning marker is warm"
         );
-        assert!(red >> 24 > u32::from(track.a), "red marker visible");
-        assert_ne!(orange, red);
+        assert!(final_ >> 24 > u32::from(track.a), "final marker visible");
+        assert_ne!(warning, final_);
         // Rounded outer corners.
         assert_eq!(c.pixel(0, 0) >> 24, 0);
         assert_eq!(c.pixel(W - 1, H - 1) >> 24, 0);
@@ -480,34 +480,34 @@ mod tests {
     #[test]
     fn bar_fills_from_the_left_in_green() {
         let c = painted(&single(), hm(9, 0) + 25 * MINUTE); // 50%
-        assert_eq!(c.pixel(250, 10), solid(colors().green));
-        assert_eq!(c.pixel(498, 10), solid(colors().green));
-        assert_ne!(c.pixel(502, 10), solid(colors().green));
+        assert_eq!(c.pixel(250, 10), solid(colors().lesson));
+        assert_eq!(c.pixel(498, 10), solid(colors().lesson));
+        assert_ne!(c.pixel(502, 10), solid(colors().lesson));
         assert_eq!(alpha(&c, 502), u32::from(colors().track.a));
     }
 
     #[test]
     fn zones_follow_elapsed_time() {
-        // 40:00 elapsed of 50:00 = 80%: the orange zone has just started.
+        // 40:00 elapsed of 50:00 = 80%: the warning zone has just started.
         let c = painted(&single(), hm(9, 0) + 40 * MINUTE + 90); // 83%
-        assert_eq!(c.pixel(500, 10), solid(colors().green));
-        assert_eq!(c.pixel(810, 10), solid(colors().orange));
-        assert_ne!(c.pixel(850, 10), solid(colors().orange), "not filled yet");
+        assert_eq!(c.pixel(500, 10), solid(colors().lesson));
+        assert_eq!(c.pixel(810, 10), solid(colors().warning));
+        assert_ne!(c.pixel(850, 10), solid(colors().warning), "not filled yet");
 
         let c = painted(&single(), hm(9, 0) + 46 * MINUTE); // 92%
-        assert_eq!(c.pixel(500, 10), solid(colors().green));
-        assert_eq!(c.pixel(850, 10), solid(colors().orange));
-        assert_eq!(c.pixel(910, 10), solid(colors().red));
-        assert_ne!(c.pixel(950, 10), solid(colors().red));
+        assert_eq!(c.pixel(500, 10), solid(colors().lesson));
+        assert_eq!(c.pixel(850, 10), solid(colors().warning));
+        assert_eq!(c.pixel(910, 10), solid(colors().final_));
+        assert_ne!(c.pixel(950, 10), solid(colors().final_));
     }
 
     #[test]
     fn a_full_bar_is_fully_coloured_without_markers_showing() {
         let c = painted(&single(), hm(9, 50) + 1);
         for (x, color) in [
-            (100, colors().green),
-            (850, colors().orange),
-            (950, colors().red),
+            (100, colors().lesson),
+            (850, colors().warning),
+            (950, colors().final_),
         ] {
             assert_eq!(c.pixel(x, 10), solid(color), "x={x}");
         }
@@ -518,7 +518,7 @@ mod tests {
     fn colours_come_from_the_config() {
         let v = view(&single(), MON, hm(9, 0) + 25 * MINUTE).unwrap();
         let mut custom = colors();
-        custom.green = Rgba::rgb(1, 2, 3);
+        custom.lesson = Rgba::rgb(1, 2, 3);
         custom.track = Rgba {
             r: 9,
             g: 9,
@@ -527,7 +527,7 @@ mod tests {
         };
         let mut canvas = Canvas::new(W, H);
         paint(&mut canvas, &v, &custom);
-        assert_eq!(canvas.pixel(100, 10), solid(custom.green));
+        assert_eq!(canvas.pixel(100, 10), solid(custom.lesson));
         assert_eq!(alpha(&canvas, 700), 0x40);
     }
 
@@ -536,7 +536,7 @@ mod tests {
         // During the break at 50% through it: the break segment spans 45%..55%.
         let c = painted(&double(), hm(9, 0) + 50 * MINUTE);
         let grey = colors().break_gap;
-        assert_eq!(c.pixel(100, 10), solid(colors().green));
+        assert_eq!(c.pixel(100, 10), solid(colors().lesson));
         assert_eq!(c.pixel(460, 10), solid(grey), "elapsed part of the break");
         let ahead = c.pixel(540, 10);
         assert!(
@@ -552,17 +552,17 @@ mod tests {
 
     #[test]
     fn each_block_of_a_double_class_has_its_own_zones() {
-        // End of block 1: orange (35%..40%) and red (40%..45%) just before the break.
+        // End of block 1: warning (35%..40%) and final (40%..45%) just before the break.
         let c = painted(&double(), hm(9, 0) + 44 * MINUTE);
-        assert_eq!(c.pixel(300, 10), solid(colors().green));
-        assert_eq!(c.pixel(375, 10), solid(colors().orange));
-        assert_eq!(c.pixel(420, 10), solid(colors().red));
-        // Block 2 starts green again.
+        assert_eq!(c.pixel(300, 10), solid(colors().lesson));
+        assert_eq!(c.pixel(375, 10), solid(colors().warning));
+        assert_eq!(c.pixel(420, 10), solid(colors().final_));
+        // Block 2 starts in the lesson zone again.
         let c = painted(&double(), hm(9, 0) + 70 * MINUTE);
-        assert_eq!(c.pixel(600, 10), solid(colors().green));
+        assert_eq!(c.pixel(600, 10), solid(colors().lesson));
         assert_eq!(
             c.pixel(420, 10),
-            solid(colors().red),
+            solid(colors().final_),
             "earlier colours stay"
         );
         assert_eq!(c.pixel(500, 10), solid(colors().break_gap));
@@ -573,12 +573,12 @@ mod tests {
         // 9:00:03 of a 3000 s class = 0.1% = 1 px: the edge pixel exists but 1 s later it moves on.
         let a = painted(&single(), hm(9, 0) + 1);
         let b = painted(&single(), hm(9, 0) + 2);
-        let edge = |c: &Canvas| (0..W).find(|&x| c.pixel(x, 10) != solid(colors().green));
+        let edge = |c: &Canvas| (0..W).find(|&x| c.pixel(x, 10) != solid(colors().lesson));
         assert!(edge(&b) >= edge(&a));
         // A fractional position gives a partially covered pixel.
         let partial = (0..5).any(|x| {
             let p = b.pixel(x, 10);
-            p != solid(colors().green) && p >> 24 > u32::from(colors().track.a)
+            p != solid(colors().lesson) && p >> 24 > u32::from(colors().track.a)
         });
         assert!(partial, "no blended edge pixel");
     }

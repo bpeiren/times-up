@@ -217,7 +217,7 @@ impl State {
         self.fit_canvas(hwnd);
         self.revision = self.store.borrow().revision();
         let layout = self.layout(hwnd);
-        let accent = self.store.borrow().config().colors.green;
+        let accent = self.store.borrow().config().colors.lesson;
         settings::paint_frame(&mut self.canvas, &layout, self.section, accent);
         let font_px = ((layout.tab_bar.h as f32 * LABEL_SCALE) as i32).max(9);
         for (section, tab) in &layout.tabs {
@@ -1305,7 +1305,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         assert!(store.borrow().live().is_some());
         let shown = store.borrow().live_schedule().classes(Weekday::Mon)[0].clone();
         assert_eq!(
-            shown.warnings[0].orange,
+            shown.warnings[0].warning,
             8 * 60,
             "the bar keeps its version"
         );
@@ -1508,7 +1508,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let (store, hwnd) = open_general(&dir);
         let before = dir.text();
         let l = page(hwnd);
-        click_rect(hwnd, l.fields[3].stepper.minus); // orange below red
+        click_rect(hwnd, l.fields[3].stepper.minus); // warning below final
         assert_eq!(dir.text(), before);
         assert_eq!(store.borrow().revision(), 0);
         // SAFETY: on the window's thread.
@@ -1519,7 +1519,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
             .map(str::to_owned);
         assert_eq!(
             message.as_deref(),
-            Some("Red must not be longer than orange")
+            Some("Final minutes must not be longer than warning")
         );
         close(hwnd);
     }
@@ -1541,8 +1541,8 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
 
         PICKED.set(Some(Rgba::rgb(1, 2, 3)));
         click_rect(hwnd, l.colors[0].swatch);
-        assert_eq!(store.borrow().config().colors.green, Rgba::rgb(1, 2, 3));
-        assert!(dir.text().contains("green = \"#010203\""));
+        assert_eq!(store.borrow().config().colors.lesson, Rgba::rgb(1, 2, 3));
+        assert!(dir.text().contains("lesson = \"#010203\""));
 
         click_rect(hwnd, l.reset);
         assert_eq!(
@@ -1558,7 +1558,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let (store, hwnd) = open_general(&dir);
         let l = page(hwnd);
         let mut c = store.borrow().config().colors;
-        c.green = Rgba::rgb(10, 20, 30);
+        c.lesson = Rgba::rgb(10, 20, 30);
         store.borrow_mut().set_colors(c).unwrap();
         // SAFETY: on the window's thread.
         unsafe {

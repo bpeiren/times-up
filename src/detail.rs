@@ -1,5 +1,5 @@
 //! The detail bar of the Settings window: the selected class drawn large, like the live bar, with
-//! its break and its orange and red zones draggable (the rules are those of [`editing`]), plus
+//! its break and its warning and final zones draggable (the rules are those of [`editing`]), plus
 //! the Add break and Remove break buttons. Plain Rust without Win32, like [`crate::timetable`]:
 //! the window feeds it pointer positions and draws the text through a callback.
 //!
@@ -155,8 +155,8 @@ fn tip(class: &Class, offset: Secs, handle: Option<Handle>) -> Option<String> {
         && let Some(label) = editing::describe(class, handle?)
     {
         let name = match edge {
-            ZoneEdge::Orange => strings::TIP_ORANGE,
-            ZoneEdge::Red => strings::TIP_RED,
+            ZoneEdge::Warning => strings::TIP_WARNING,
+            ZoneEdge::Final => strings::TIP_FINAL,
         };
         return Some(format!("{name} {} {}", strings::TIP_FROM, label.text));
     }
@@ -561,7 +561,7 @@ impl Detail {
                 format_clock(class.start + brk.start),
                 format_clock(class.start + brk.end())
             );
-            return (text, if fits { colors.text } else { colors.red });
+            return (text, if fits { colors.text } else { colors.final_ });
         }
         let handle = Self::handle_at(layout, class, x);
         let secs = offset.clamp(0, i64::from(class.duration())) as Secs;
@@ -731,11 +731,11 @@ mod tests {
         );
         let zone = Handle::Zone {
             block: 0,
-            edge: ZoneEdge::Orange,
+            edge: ZoneEdge::Warning,
         };
         assert_eq!(
             tip(&class, min(35), Some(zone)).unwrap(),
-            "Orange from 09:35"
+            "Warning from 09:35"
         );
         assert_eq!(format_length(90), "1 min 30 s");
         assert_eq!(format_length(30), "30 s");
@@ -775,13 +775,13 @@ mod tests {
         let l = lay();
         let class = class_of(&store);
         let y = mid_y(&l);
-        // The orange zone starts 10 minutes before the end of the block.
+        // The warning zone starts 10 minutes before the end of the block.
         view.press(&mut store, SELECTED, &l, col(&l, &class, 40 * 60), y);
         assert!(view.is_dragging());
         view.moved(&l, col(&l, &class, 35 * 60), y);
         view.release(&mut store);
         let w = class_of(&store).warnings[0];
-        assert!(w.orange > 14 * 60 && w.orange < 16 * 60, "{w:?}");
+        assert!(w.warning > 14 * 60 && w.warning < 16 * 60, "{w:?}");
         assert_eq!(dir.reloaded().warnings[0], w);
     }
 
@@ -1044,11 +1044,11 @@ mod tests {
         let (canvas, drawn) = paint(&view, &store, SELECTED);
         let colors = store.config().colors;
         let pixel = |offset| canvas.pixel(col(&l, &class, offset) as u32, mid_y(&l) as u32);
-        assert_eq!(pixel(10 * 60), argb(colors.green), "first block");
+        assert_eq!(pixel(10 * 60), argb(colors.lesson), "first block");
         assert_eq!(pixel(50 * 60), argb(colors.break_gap), "the break");
         assert_eq!(
             pixel(43 * 60),
-            argb(colors.red),
+            argb(colors.final_),
             "the last minutes of block 1"
         );
         let texts: Vec<&str> = drawn.iter().map(|(t, _, _)| t.as_str()).collect();
@@ -1144,7 +1144,7 @@ mod tests {
         let inside = canvas.pixel(col(&l, &class, 25 * 60) as u32, y as u32);
         let outside = canvas.pixel(col(&l, &class, 10 * 60) as u32, y as u32);
         assert_ne!(inside, outside, "the span is shaded");
-        assert_eq!(outside, argb(colors.green));
+        assert_eq!(outside, argb(colors.lesson));
 
         view.moved(&l, col(&l, &class, 46 * 60), y);
         let (_, drawn) = paint(&view, &store, SELECTED);
@@ -1152,7 +1152,7 @@ mod tests {
             .iter()
             .find(|(t, _, _)| t.starts_with("09:41"))
             .unwrap();
-        assert_eq!(*color, colors.red, "it does not fit before the end");
+        assert_eq!(*color, colors.final_, "it does not fit before the end");
     }
 
     #[test]
