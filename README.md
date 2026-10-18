@@ -199,9 +199,9 @@ from your machine if CI is unavailable) is in `.\scripts\release.ps1 -Help` (or
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and push to main on a Windows runner:
-`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, the release build with the exe
-dependency check, and the release script tests. A failing check does not block merging yet, but it is
+`.github/workflows/ci.yml` runs on every pull request and push to main on a Windows runner, as four parallel jobs:
+**Lint** (`cargo fmt --check`, `cargo clippy -D warnings`), **Test** (`cargo test`), **Build** (the
+release build with the exe dependency check) and **Release script tests**. A failing check does not block merging yet, but it is
 visible on the pull request. The window and tray tests need an interactive desktop;
 `scripts\ci-tests.ps1` skips only the `win::` tests, with a warning annotation, if the runner has
 none (locally nothing is skipped; set `TIMES_UP_REQUIRE_DESKTOP=1` to make that an error).

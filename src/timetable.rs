@@ -1289,7 +1289,9 @@ mod tests {
         // ...and then it is gone.
         fs::write(
             dir.0.join(config::FILE_NAME),
-            day_text(&[("11:00", "11:50")]),
+            // A different length too: the file is told apart by its modified time and length, and a
+            // coarse file system clock may give two quick writes the same time.
+            day_text(&[("11:00", "11:50"), ("12:00", "12:50")]),
         )
         .unwrap();
         assert!(store.poll());
