@@ -2,7 +2,7 @@ TIME'S UP - a class-hour timer for your screen
 ==============================================
 
 A small bar that stays on top of your slides and shows how much of the current class is left.
-It fills from the left: green, then orange for the last 10 minutes, then red for the last 5.
+It fills from the left: the lesson colour, then the warning colour for the last 10 minutes, then the final colour for the last 5.
 A 100 minute class shows two blocks with a break in the middle.
 
 Getting started
@@ -21,14 +21,16 @@ The bar
 - The text shows the time left in the current block, centred in that block, or "Break mm:ss" on the
   break.
 - Drag it to move it. Drag its edges or corners to resize it. Its place and size are remembered.
-- Drag the break, or the thin orange and red lines, to change them for the class that is running.
+- Drag the break, or the thin warning and final lines, to change them for the class that is running.
   While you drag, a small time at the bottom of the bar shows when it starts (and ends). Such a
   change is forgotten when the class is over.
 - Right-click the bar, or click the icon in the notification area:
     Save as default for this slot   keeps those changes for this class from now on
     Settings...                     opens the Settings window: the week, with classes you can
                                     drag, resize, add (+) and remove (Delete),
-                                    and the break and warning times of the selected class
+                                    and the break and warning times of the selected class;
+                                    its General tab sets the colours, the lead-in and the
+                                    default break and warning minutes
     Start with Windows              starts the bar when you sign in (switch on again if you move
                                     the folder)
     Quit

@@ -8,6 +8,7 @@ pub mod canvas;
 pub mod config;
 pub mod detail;
 pub mod editing;
+pub mod general;
 pub mod icon;
 pub mod interaction;
 pub mod schedule;

@@ -1,4 +1,4 @@
-//! Editing a class on the bar itself: the break and the orange and red zone boundaries can be
+//! Editing a class on the bar itself: the break and the warning and final zone boundaries can be
 //! dragged. Pure rules (no Win32): which handle is under the pointer, and what a drag does to the
 //! class, snapped to whole minutes and clamped so the result is always a sensible class.
 
@@ -7,14 +7,14 @@ use crate::schedule::{Break, Class, MINUTE, Secs, Warnings, format_clock};
 /// A block between the start (or the break) and the end of the class needs at least this much.
 pub const MIN_BLOCK: Secs = 5 * MINUTE;
 pub const MIN_BREAK: Secs = MINUTE;
-/// The red zone is at least this long, and orange starts at least this much before red.
+/// The final zone is at least this long, and warning starts at least this much before final.
 pub const MIN_RED: Secs = MINUTE;
 pub const MIN_ZONE_GAP: Secs = MINUTE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZoneEdge {
-    Orange,
-    Red,
+    Warning,
+    Final,
 }
 
 /// Something on the bar that can be dragged.
@@ -26,7 +26,7 @@ pub enum Handle {
     BreakEnd,
     /// The break as a whole: it keeps its length.
     BreakBody,
-    /// Where the orange or red zone of a block begins.
+    /// Where the warning or final zone of a block begins.
     Zone { block: usize, edge: ZoneEdge },
 }
 
@@ -41,8 +41,8 @@ fn zone_at(class: &Class, block: usize, edge: ZoneEdge) -> Secs {
     let b = class.block(block);
     let w = class.warnings[block];
     let before_end = match edge {
-        ZoneEdge::Orange => w.orange,
-        ZoneEdge::Red => w.red,
+        ZoneEdge::Warning => w.warning,
+        ZoneEdge::Final => w.final_,
     };
     b.end - before_end.min(b.len())
 }
@@ -102,7 +102,7 @@ pub fn handle_at(class: &Class, x: f32, width: f32, grip: f32) -> Option<Handle>
         candidates.push((px(b.end()), Handle::BreakEnd));
     }
     for block in 0..class.block_count() {
-        for edge in [ZoneEdge::Orange, ZoneEdge::Red] {
+        for edge in [ZoneEdge::Warning, ZoneEdge::Final] {
             candidates.push((
                 px(zone_at(class, block, edge)),
                 Handle::Zone { block, edge },
@@ -165,23 +165,23 @@ pub fn drag(class: &Class, handle: Handle, delta: i64) -> Class {
             let len = i64::from(class.block(block).len());
             let w = class.warnings[block];
             // The zones as they are drawn: never longer than the block itself.
-            let orange = i64::from(w.orange).min(len);
-            let red = i64::from(w.red).min(len);
-            let (gap, min_red) = (i64::from(MIN_ZONE_GAP), i64::from(MIN_RED));
+            let warning = i64::from(w.warning).min(len);
+            let final_ = i64::from(w.final_).min(len);
+            let (gap, min_final) = (i64::from(MIN_ZONE_GAP), i64::from(MIN_RED));
             // Dragging later means less time before the end of the block.
-            let (new_orange, new_red) = match edge {
-                ZoneEdge::Orange => {
-                    let lo = (red + gap).min(len);
-                    (snap(orange - delta).clamp(lo, len), red)
+            let (new_warning, new_final) = match edge {
+                ZoneEdge::Warning => {
+                    let lo = (final_ + gap).min(len);
+                    (snap(warning - delta).clamp(lo, len), final_)
                 }
-                ZoneEdge::Red => {
-                    let hi = (orange - gap).max(min_red);
-                    (orange, snap(red - delta).clamp(min_red, hi))
+                ZoneEdge::Final => {
+                    let hi = (warning - gap).max(min_final);
+                    (warning, snap(final_ - delta).clamp(min_final, hi))
                 }
             };
             out.warnings[block] = Warnings {
-                orange: new_orange as Secs,
-                red: new_red.min(new_orange) as Secs,
+                warning: new_warning as Secs,
+                final_: new_final.min(new_warning) as Secs,
             };
         }
     }
@@ -235,31 +235,31 @@ mod tests {
     #[test]
     fn every_zone_boundary_has_a_handle() {
         let c = double();
-        // Block 1: orange at 35 min, red at 40 min. Block 2: orange at 90, red at 95.
+        // Block 1: warning at 35 min, final at 40 min. Block 2: warning at 90, final at 95.
         let zone = |block, edge| Some(Handle::Zone { block, edge });
-        assert_eq!(at(&c, 350.0), zone(0, ZoneEdge::Orange));
-        assert_eq!(at(&c, 400.0), zone(0, ZoneEdge::Red));
-        assert_eq!(at(&c, 900.0), zone(1, ZoneEdge::Orange));
-        assert_eq!(at(&c, 950.0), zone(1, ZoneEdge::Red));
-        assert_eq!(at(&c, 902.0), zone(1, ZoneEdge::Orange));
+        assert_eq!(at(&c, 350.0), zone(0, ZoneEdge::Warning));
+        assert_eq!(at(&c, 400.0), zone(0, ZoneEdge::Final));
+        assert_eq!(at(&c, 900.0), zone(1, ZoneEdge::Warning));
+        assert_eq!(at(&c, 950.0), zone(1, ZoneEdge::Final));
+        assert_eq!(at(&c, 902.0), zone(1, ZoneEdge::Warning));
     }
 
     #[test]
     fn a_single_block_class_has_only_zone_handles() {
-        let c = single(); // 50 minutes: orange at 40, red at 45
+        let c = single(); // 50 minutes: warning at 40, final at 45
         let w = 500.0;
         assert_eq!(
             handle_at(&c, 400.0, w, GRIP),
             Some(Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Orange
+                edge: ZoneEdge::Warning
             })
         );
         assert_eq!(
             handle_at(&c, 450.0, w, GRIP),
             Some(Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Red
+                edge: ZoneEdge::Final
             })
         );
         assert_eq!(handle_at(&c, 100.0, w, GRIP), None);
@@ -276,12 +276,12 @@ mod tests {
 
     #[test]
     fn the_nearest_handle_wins_when_two_are_in_reach() {
-        // Orange at 6 minutes before the block end and red 1 minute before it, in a bar where a
+        // Warning at 6 minutes before the block end and final 1 minute before it, in a bar where a
         // minute is only 6 px: the pointer picks the closer boundary.
         let mut c = double();
         c.warnings[0] = Warnings {
-            orange: 2 * 60,
-            red: 60,
+            warning: 2 * 60,
+            final_: 60,
         };
         let w = 600.0; // 6 px per minute
         let orange_x = (45.0 - 2.0) * 6.0;
@@ -290,26 +290,26 @@ mod tests {
             handle_at(&c, orange_x + 1.0, w, 5.0),
             Some(Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Orange
+                edge: ZoneEdge::Warning
             })
         );
         assert_eq!(
             handle_at(&c, red_x - 1.0, w, 5.0),
             Some(Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Red
+                edge: ZoneEdge::Final
             })
         );
     }
 
     #[test]
     fn break_edges_win_over_zone_boundaries_at_the_same_spot() {
-        // Red zone of 5 minutes ends exactly where a break could start: a block-1 red marker
+        // Final zone of 5 minutes ends exactly where a break could start: a block-1 final marker
         // sitting on the break start.
         let mut c = double();
         c.warnings[0] = Warnings {
-            orange: 10 * 60,
-            red: 0,
+            warning: 10 * 60,
+            final_: 0,
         };
         // red_at == break start (45 min).
         assert_eq!(at(&c, 450.0), Some(Handle::BreakStart));
@@ -332,18 +332,18 @@ mod tests {
     fn a_zone_boundary_is_described_by_the_time_the_zone_starts() {
         let c = double(); // 09:00-10:40, blocks 09:00-09:45 and 09:55-10:40
         let label = |block, edge| describe(&c, Handle::Zone { block, edge }).unwrap();
-        let orange1 = label(0, ZoneEdge::Orange);
-        assert_eq!(orange1.text, "09:35");
+        let warning1 = label(0, ZoneEdge::Warning);
+        assert_eq!(warning1.text, "09:35");
         assert!(
-            (orange1.position - 0.35).abs() < 1e-4,
+            (warning1.position - 0.35).abs() < 1e-4,
             "{}",
-            orange1.position
+            warning1.position
         );
-        assert_eq!(label(0, ZoneEdge::Red).text, "09:40");
-        assert_eq!(label(1, ZoneEdge::Orange).text, "10:30");
-        let red2 = label(1, ZoneEdge::Red);
-        assert_eq!(red2.text, "10:35");
-        assert!((red2.position - 0.95).abs() < 1e-4);
+        assert_eq!(label(0, ZoneEdge::Final).text, "09:40");
+        assert_eq!(label(1, ZoneEdge::Warning).text, "10:30");
+        let final2 = label(1, ZoneEdge::Final);
+        assert_eq!(final2.text, "10:35");
+        assert!((final2.position - 0.95).abs() < 1e-4);
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
             &double(),
             Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Orange,
+                edge: ZoneEdge::Warning,
             },
             mins(3),
         );
@@ -361,7 +361,7 @@ mod tests {
                 &moved,
                 Handle::Zone {
                     block: 0,
-                    edge: ZoneEdge::Orange
+                    edge: ZoneEdge::Warning
                 }
             )
             .unwrap()
@@ -374,14 +374,14 @@ mod tests {
     fn a_zone_longer_than_its_block_is_described_where_it_is_drawn() {
         let mut c = double();
         c.warnings[0] = Warnings {
-            orange: 60 * 60,
-            red: 5 * 60,
+            warning: 60 * 60,
+            final_: 5 * 60,
         };
         let label = describe(
             &c,
             Handle::Zone {
                 block: 0,
-                edge: ZoneEdge::Orange,
+                edge: ZoneEdge::Warning,
             },
         )
         .unwrap();
@@ -421,7 +421,7 @@ mod tests {
                 &c,
                 Handle::Zone {
                     block: 1,
-                    edge: ZoneEdge::Red
+                    edge: ZoneEdge::Final
                 }
             ),
             None
@@ -431,7 +431,7 @@ mod tests {
                 &c,
                 Handle::Zone {
                     block: 0,
-                    edge: ZoneEdge::Red
+                    edge: ZoneEdge::Final
                 }
             )
             .is_some()
@@ -544,38 +544,38 @@ mod tests {
 
     fn zones(c: &Class, block: usize) -> (i64, i64) {
         let w = c.warnings[block];
-        (i64::from(w.orange), i64::from(w.red))
+        (i64::from(w.warning), i64::from(w.final_))
     }
 
-    fn orange(block: usize) -> Handle {
+    fn warning(block: usize) -> Handle {
         Handle::Zone {
             block,
-            edge: ZoneEdge::Orange,
+            edge: ZoneEdge::Warning,
         }
     }
 
-    fn red(block: usize) -> Handle {
+    fn final_(block: usize) -> Handle {
         Handle::Zone {
             block,
-            edge: ZoneEdge::Red,
+            edge: ZoneEdge::Final,
         }
     }
 
     #[test]
     fn dragging_a_zone_boundary_later_shortens_the_zone() {
-        // Orange starts 10 minutes before the end; 3 minutes later leaves 7.
-        let c = drag(&double(), orange(0), mins(3));
+        // Warning starts 10 minutes before the end; 3 minutes later leaves 7.
+        let c = drag(&double(), warning(0), mins(3));
         assert_eq!(zones(&c, 0), (mins(7), mins(5)));
         // Earlier lengthens it.
-        let c = drag(&double(), orange(0), -mins(4));
+        let c = drag(&double(), warning(0), -mins(4));
         assert_eq!(zones(&c, 0), (mins(14), mins(5)));
-        let c = drag(&double(), red(0), -mins(2));
+        let c = drag(&double(), final_(0), -mins(2));
         assert_eq!(zones(&c, 0), (mins(10), mins(7)));
     }
 
     #[test]
     fn each_block_has_its_own_zones() {
-        let c = drag(&double(), red(1), mins(2));
+        let c = drag(&double(), final_(1), mins(2));
         assert_eq!(zones(&c, 1), (mins(10), mins(3)));
         assert_eq!(
             zones(&c, 0),
@@ -586,56 +586,56 @@ mod tests {
 
     #[test]
     fn orange_stays_before_red_with_a_minute_between() {
-        // Orange dragged past red: stops one minute before it.
-        let c = drag(&double(), orange(0), mins(30));
+        // Warning dragged past final: stops one minute before it.
+        let c = drag(&double(), warning(0), mins(30));
         assert_eq!(zones(&c, 0), (mins(6), mins(5)));
-        // Red dragged earlier than orange: stops one minute after it.
-        let c = drag(&double(), red(0), -mins(30));
+        // Final dragged earlier than warning: stops one minute after it.
+        let c = drag(&double(), final_(0), -mins(30));
         assert_eq!(zones(&c, 0), (mins(10), mins(9)));
     }
 
     #[test]
     fn red_keeps_at_least_a_minute() {
-        let c = drag(&double(), red(0), mins(30));
+        let c = drag(&double(), final_(0), mins(30));
         assert_eq!(zones(&c, 0), (mins(10), mins(1)));
     }
 
     #[test]
     fn zones_stay_inside_their_block_so_they_never_reach_the_break() {
-        // Orange dragged far to the left stops at the start of the block (45 minutes long).
-        let c = drag(&double(), orange(0), -mins(500));
+        // Warning dragged far to the left stops at the start of the block (45 minutes long).
+        let c = drag(&double(), warning(0), -mins(500));
         assert_eq!(zones(&c, 0), (mins(45), mins(5)));
         // The second block is also 45 minutes, so it cannot reach into the break either.
-        let c = drag(&double(), orange(1), -mins(500));
+        let c = drag(&double(), warning(1), -mins(500));
         assert_eq!(zones(&c, 1), (mins(45), mins(5)));
-        // Red follows the same limit through orange.
-        let c = drag(&double(), red(1), -mins(500));
+        // Final follows the same limit through warning.
+        let c = drag(&double(), final_(1), -mins(500));
         assert_eq!(zones(&c, 1), (mins(10), mins(9)));
     }
 
     #[test]
     fn zone_drags_snap_to_whole_minutes() {
-        let c = drag(&double(), orange(0), 100); // 1.67 min -> 2
+        let c = drag(&double(), warning(0), 100); // 1.67 min -> 2
         assert_eq!(zones(&c, 0), (mins(8), mins(5)));
-        let c = drag(&double(), orange(0), 20); // less than half a minute -> no change
+        let c = drag(&double(), warning(0), 20); // less than half a minute -> no change
         assert_eq!(zones(&c, 0), (mins(10), mins(5)));
     }
 
     #[test]
     fn a_zone_longer_than_its_block_is_dragged_from_where_it_is_drawn() {
-        // Orange is configured as 60 minutes but a 45 minute block only shows 45.
+        // Warning is configured as 60 minutes but a 45 minute block only shows 45.
         let mut c = double();
         c.warnings[0] = Warnings {
-            orange: 60 * 60,
-            red: 5 * 60,
+            warning: 60 * 60,
+            final_: 5 * 60,
         };
-        let moved = drag(&c, orange(0), mins(5));
+        let moved = drag(&c, warning(0), mins(5));
         assert_eq!(zones(&moved, 0), (mins(40), mins(5)));
     }
 
     #[test]
     fn a_dragged_zone_always_gives_a_valid_class() {
-        let handles = [orange(0), red(0), orange(1), red(1)];
+        let handles = [warning(0), final_(0), warning(1), final_(1)];
         for handle in handles {
             for delta in [
                 -mins(1000),
@@ -652,7 +652,7 @@ mod tests {
                 assert!(c.validate().is_ok());
                 for block in 0..2 {
                     let (o, r) = zones(&c, block);
-                    assert!(r <= o, "{handle:?} {delta}: red {r} orange {o}");
+                    assert!(r <= o, "{handle:?} {delta}: final {r} warning {o}");
                     assert!(r >= 60, "{handle:?} {delta}");
                     assert!(o <= mins(45), "{handle:?} {delta}");
                 }
@@ -663,13 +663,13 @@ mod tests {
     #[test]
     fn zone_handles_for_a_missing_block_do_nothing() {
         let c = single();
-        assert_eq!(drag(&c, orange(1), mins(5)), c);
-        assert_eq!(drag(&c, red(1), mins(5)), c);
+        assert_eq!(drag(&c, warning(1), mins(5)), c);
+        assert_eq!(drag(&c, final_(1), mins(5)), c);
     }
 
     #[test]
     fn dragging_a_zone_does_not_touch_the_break() {
-        let c = drag(&double(), orange(0), mins(2));
+        let c = drag(&double(), warning(0), mins(2));
         assert_eq!(c.brk, double().brk);
         let c = drag(&double(), Handle::BreakBody, mins(2));
         assert_eq!(c.warnings, double().warnings);
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn moving_the_break_changes_which_block_a_boundary_belongs_to() {
-        // A 20 minute first block (break at 20..30) with red 5 and orange 10 before its end.
+        // A 20 minute first block (break at 20..30) with final 5 and warning 10 before its end.
         let c = drag(&double(), Handle::BreakBody, -mins(25));
         assert_eq!(brk(&c), (mins(20), mins(30)));
         assert_eq!(c.block(0).len(), mins(20) as u32);
@@ -685,7 +685,7 @@ mod tests {
         let (o, r) = zones(&c, 0);
         assert!(o <= mins(20) && r <= o);
         // A zone drag on the shortened block uses the new length.
-        let c = drag(&c, orange(0), -mins(500));
+        let c = drag(&c, warning(0), -mins(500));
         assert_eq!(zones(&c, 0).0, mins(20));
     }
 }

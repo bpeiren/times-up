@@ -40,6 +40,7 @@ use crate::banner::{self, Answer};
 use crate::canvas::{Align, Canvas};
 use crate::config::{Rgba, WindowRect};
 use crate::detail::{self, Detail};
+use crate::general::{self, Page, Slot};
 use crate::interaction::{CursorShape, Rect};
 use crate::schedule::{Secs, Weekday};
 use crate::settings::{self, Layout, Section};
@@ -60,6 +61,8 @@ const LABEL_SELECTED: Rgba = Rgba::rgb(0xf2, 0xf2, 0xf2);
 type ClassKey = (Weekday, Secs, Secs);
 /// The local day and time.
 type Clock = fn() -> (Weekday, Secs);
+/// Asks for a colour, starting from the current one; `None` when cancelled.
+type Picker = fn(HWND, Rgba) -> Option<Rgba>;
 
 thread_local! {
     /// The open Settings window (an `HWND` as a number), or 0.
@@ -72,6 +75,8 @@ struct State {
     section: Section,
     timetable: Timetable,
     detail: Detail,
+    general: Page,
+    picker: Picker,
     /// The running class (day, start, end) whose temporary changes are being asked about.
     banner: Option<ClassKey>,
     /// The answer given for the running class, until that class ends.
@@ -109,6 +114,10 @@ impl State {
             content
         };
         detail::split(rest, scale)
+    }
+
+    fn general_layout(&self, hwnd: HWND) -> general::Layout {
+        general::layout(self.layout(hwnd).content, Self::scale(hwnd))
     }
 
     fn banner_layout(&self, hwnd: HWND) -> Option<banner::Layout> {
@@ -208,7 +217,7 @@ impl State {
         self.fit_canvas(hwnd);
         self.revision = self.store.borrow().revision();
         let layout = self.layout(hwnd);
-        let accent = self.store.borrow().config().colors.green;
+        let accent = self.store.borrow().config().colors.lesson;
         settings::paint_frame(&mut self.canvas, &layout, self.section, accent);
         let font_px = ((layout.tab_bar.h as f32 * LABEL_SCALE) as i32).max(9);
         for (section, tab) in &layout.tabs {
@@ -235,16 +244,35 @@ impl State {
                     banner::paint(canvas, &layout, &mut text);
                 }
             }
+            Section::General => {
+                let page = self.general_layout(hwnd);
+                let store = self.store.borrow();
+                let mut text = |canvas: &mut Canvas, text: &str, area, color, align| {
+                    draw_text(canvas, text, area, color, align);
+                };
+                self.general
+                    .paint(&mut self.canvas, &store, &page, &mut text);
+            }
         }
     }
 
-    fn press(&mut self, hwnd: HWND, x: i32, y: i32) {
+    /// A click. Returns the colour the teacher wants to change, for the caller to ask for once
+    /// the state is not borrowed any more (the colour dialog runs its own message loop).
+    fn press(&mut self, hwnd: HWND, x: i32, y: i32) -> Option<(Slot, Rgba)> {
         if let Some(section) = self.layout(hwnd).tab_at(x, y) {
             if section != self.section {
                 self.section = section;
                 invalidate(hwnd);
             }
-            return;
+            return None;
+        }
+        if self.section == Section::General {
+            let page = self.general_layout(hwnd);
+            let pick = self
+                .general
+                .press(&mut self.store.borrow_mut(), &page, x, y);
+            invalidate(hwnd);
+            return pick;
         }
         if let Some(layout) = self.banner_layout(hwnd)
             && contains(layout.area, x, y)
@@ -252,7 +280,7 @@ impl State {
             if let Some(answer) = layout.answer_at(x, y) {
                 self.answer(hwnd, answer);
             }
-            return;
+            return None;
         }
         match self.section {
             Section::Timetable if contains(self.areas(hwnd).1, x, y) => {
@@ -261,7 +289,7 @@ impl State {
                 let selection = self.timetable.selected(&store);
                 self.detail.press(&mut store, selection, &below, x, y);
             }
-            Section::Timetable => {
+            _ => {
                 let week = self.week_layout(hwnd);
                 self.timetable
                     .press(&mut self.store.borrow_mut(), &week, x, y);
@@ -269,6 +297,14 @@ impl State {
         }
         self.sync_detail();
         self.after_edit();
+        invalidate(hwnd);
+        None
+    }
+
+    /// The colour dialog returned `color` for `slot`.
+    fn set_color(&mut self, hwnd: HWND, slot: Slot, color: Rgba) {
+        self.general
+            .set_color(&mut self.store.borrow_mut(), slot, color);
         invalidate(hwnd);
     }
 
@@ -312,13 +348,16 @@ impl State {
     }
 
     fn delete_key(&mut self, hwnd: HWND) {
+        if self.section != Section::Timetable {
+            return;
+        }
         self.timetable.remove_selected(&mut self.store.borrow_mut());
         self.after_edit();
         invalidate(hwnd);
     }
 
     fn cursor(&self, hwnd: HWND, x: i32, y: i32) -> CursorShape {
-        if y < self.layout(hwnd).content.y {
+        if y < self.layout(hwnd).content.y || self.section != Section::Timetable {
             return CursorShape::Arrow;
         }
         let store = self.store.borrow();
@@ -419,6 +458,15 @@ pub fn open(store: Rc<RefCell<Store>>) -> windows::core::Result<HWND> {
 
 /// Like [`open`], with the clock that tells which class is running.
 pub fn open_with_clock(store: Rc<RefCell<Store>>, clock: Clock) -> windows::core::Result<HWND> {
+    open_with(store, clock, super::picker::pick_color)
+}
+
+/// Like [`open_with_clock`], with the way a colour is asked for.
+pub fn open_with(
+    store: Rc<RefCell<Store>>,
+    clock: Clock,
+    picker: Picker,
+) -> windows::core::Result<HWND> {
     let existing = HWND(OPEN.get() as *mut _);
     // SAFETY: plain calls on a handle that is checked first.
     unsafe {
@@ -441,9 +489,11 @@ pub fn open_with_clock(store: Rc<RefCell<Store>>, clock: Clock) -> windows::core
     let state = Box::new(State {
         store,
         canvas: Canvas::new(1, 1),
-        section: Section::Timetable,
+        section: Section::General,
         timetable: Timetable::default(),
         detail: Detail::default(),
+        general: Page::default(),
+        picker,
         banner: None,
         answered: None,
         clock,
@@ -576,12 +626,23 @@ unsafe extern "system" fn window_proc(
             }
             WM_LBUTTONDOWN => {
                 let (x, y) = client_xy(lparam);
+                let mut pick = None;
+                let mut picker = None;
                 let dragging = state_of(hwnd).is_some_and(|state| {
-                    state.press(hwnd, x, y);
+                    pick = state.press(hwnd, x, y);
+                    picker = Some(state.picker);
                     state.is_dragging()
                 });
                 if dragging {
                     let _ = SetCapture(hwnd);
+                }
+                // The colour dialog dispatches messages to this window: ask for the colour while
+                // nothing of the state is borrowed.
+                if let (Some((slot, current)), Some(picker)) = (pick, picker)
+                    && let Some(color) = picker(hwnd, current)
+                    && let Some(state) = state_of(hwnd)
+                {
+                    state.set_color(hwnd, slot, color);
                 }
                 return LRESULT(0);
             }
@@ -913,15 +974,26 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_only_tab_keeps_the_timetable_section() {
+    fn clicking_the_timetable_tab_keeps_the_timetable_section() {
         let dir = Scratch::new("tab", "");
         let hwnd = open(dir.store()).unwrap();
-        let lparam = LPARAM((10 << 16) | 10);
         // SAFETY: on the window's thread.
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
+        let lparam = LPARAM((((tab.y + 5) << 16) | (tab.x + 5)) as isize);
+        // SAFETY: as above.
         unsafe {
             SendMessageW(hwnd, WM_LBUTTONDOWN, None, Some(lparam));
             assert_eq!(state_of(hwnd).unwrap().section, Section::Timetable);
         }
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_window_opens_on_the_general_tab() {
+        let dir = Scratch::new("opens-general", "");
+        let hwnd = open(dir.store()).unwrap();
+        // SAFETY: on the window's thread.
+        assert_eq!(unsafe { state_of(hwnd) }.unwrap().section, Section::General);
         close(hwnd);
     }
 
@@ -942,6 +1014,8 @@ classes = [{ start = \"09:00\", end = \"09:50\" }]
     fn class_and_plus(hwnd: HWND) -> ((i32, i32), (i32, i32)) {
         // SAFETY: on the window's thread; the borrow ends with this function.
         let state = unsafe { state_of(hwnd) }.unwrap();
+        // The window opens on General; these tests work on the timetable.
+        state.section = Section::Timetable;
         let week = state.week_layout(hwnd);
         let class = state.store.borrow().schedule().classes(Weekday::Mon)[0].clone();
         let r = week.class_rect(0, &class);
@@ -1231,7 +1305,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         assert!(store.borrow().live().is_some());
         let shown = store.borrow().live_schedule().classes(Weekday::Mon)[0].clone();
         assert_eq!(
-            shown.warnings[0].orange,
+            shown.warnings[0].warning,
             8 * 60,
             "the bar keeps its version"
         );
@@ -1359,6 +1433,159 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
             None,
             "no longer the class they belonged to"
         );
+        close(hwnd);
+    }
+
+    // ---- the General section ----
+
+    thread_local! {
+        static PICKED: Cell<Option<Rgba>> = const { Cell::new(None) };
+        static ASKED: Cell<Option<Rgba>> = const { Cell::new(None) };
+    }
+
+    fn fake_picker(_: HWND, current: Rgba) -> Option<Rgba> {
+        ASKED.set(Some(current));
+        PICKED.get()
+    }
+
+    fn open_general(dir: &Scratch) -> (Rc<RefCell<Store>>, HWND) {
+        let store = dir.store();
+        let hwnd = open_with(store.clone(), fake_clock_now, fake_picker).unwrap();
+        // SAFETY: on the window's thread.
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[0].1;
+        click(hwnd, tab.x + 5, tab.y + 5);
+        (store, hwnd)
+    }
+
+    fn fake_clock_now() -> (Weekday, Secs) {
+        (Weekday::Mon, 3 * 3600)
+    }
+
+    fn page(hwnd: HWND) -> general::Layout {
+        // SAFETY: on the window's thread.
+        unsafe { state_of(hwnd) }.unwrap().general_layout(hwnd)
+    }
+
+    fn click_rect(hwnd: HWND, r: Rect) {
+        click(hwnd, r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    #[test]
+    fn the_general_tab_shows_the_page_and_the_timetable_tab_brings_the_week_back() {
+        let dir = Scratch::new("tabs", MONDAY);
+        let (_store, hwnd) = open_general(&dir);
+        // SAFETY: on the window's thread.
+        let section = || unsafe { state_of(hwnd) }.unwrap().section;
+        assert_eq!(section(), Section::General);
+        // SAFETY: as above.
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[1].1;
+        click(hwnd, tab.x + 5, tab.y + 5);
+        assert_eq!(section(), Section::Timetable);
+        close(hwnd);
+    }
+
+    #[test]
+    fn clicking_a_stepper_saves_and_applies_the_value() {
+        let dir = Scratch::new("stepper", MONDAY);
+        let (store, hwnd) = open_general(&dir);
+        let l = page(hwnd);
+        click_rect(hwnd, l.fields[0].stepper.plus); // lead-in 5 -> 6
+        click_rect(hwnd, l.fields[1].stepper.plus); // linger 10 -> 15
+        assert_eq!(store.borrow().schedule().lead_in, 6 * 60);
+        assert_eq!(store.borrow().schedule().linger, 15);
+        let text = dir.text();
+        assert!(text.contains("lead_in_minutes = 6") && text.contains("linger_seconds = 15"));
+        assert!(text.contains("classes = [{ start = \"09:00\", end = \"09:50\" }]"));
+        close(hwnd);
+    }
+
+    #[test]
+    fn a_refused_step_changes_nothing_and_tells_why() {
+        let dir = Scratch::new(
+            "refused",
+            "[general]\nred_minutes = 10\norange_minutes = 10\n",
+        );
+        let (store, hwnd) = open_general(&dir);
+        let before = dir.text();
+        let l = page(hwnd);
+        click_rect(hwnd, l.fields[3].stepper.minus); // warning below final
+        assert_eq!(dir.text(), before);
+        assert_eq!(store.borrow().revision(), 0);
+        // SAFETY: on the window's thread.
+        let message = unsafe { state_of(hwnd) }
+            .unwrap()
+            .general
+            .message()
+            .map(str::to_owned);
+        assert_eq!(
+            message.as_deref(),
+            Some("Final minutes must not be longer than warning")
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn a_colour_chosen_in_the_dialog_is_saved_and_a_cancel_changes_nothing() {
+        let dir = Scratch::new("pick", MONDAY);
+        let (store, hwnd) = open_general(&dir);
+        let l = page(hwnd);
+
+        PICKED.set(None);
+        click_rect(hwnd, l.colors[0].swatch);
+        assert_eq!(
+            ASKED.get(),
+            Some(Rgba::rgb(0x2e, 0xcc, 0x71)),
+            "starts from the current colour"
+        );
+        assert_eq!(store.borrow().revision(), 0, "cancelled");
+
+        PICKED.set(Some(Rgba::rgb(1, 2, 3)));
+        click_rect(hwnd, l.colors[0].swatch);
+        assert_eq!(store.borrow().config().colors.lesson, Rgba::rgb(1, 2, 3));
+        assert!(dir.text().contains("lesson = \"#010203\""));
+
+        click_rect(hwnd, l.reset);
+        assert_eq!(
+            store.borrow().config().colors,
+            crate::config::Colors::default()
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn the_page_is_painted_with_the_chosen_colours() {
+        let dir = Scratch::new("paint-general", MONDAY);
+        let (store, hwnd) = open_general(&dir);
+        let l = page(hwnd);
+        let mut c = store.borrow().config().colors;
+        c.lesson = Rgba::rgb(10, 20, 30);
+        store.borrow_mut().set_colors(c).unwrap();
+        // SAFETY: on the window's thread.
+        unsafe {
+            SendMessageW(hwnd, WM_PAINT, None, None);
+            let state = state_of(hwnd).unwrap();
+            let row = &l.colors[0];
+            assert_eq!(
+                state
+                    .canvas
+                    .pixel((row.swatch.x + 4) as u32, (row.swatch.y + 12) as u32),
+                0xff0a_141e
+            );
+        }
+        close(hwnd);
+    }
+
+    #[test]
+    fn delete_on_the_general_page_does_not_remove_a_class() {
+        let dir = Scratch::new("delete-general", MONDAY);
+        let store = dir.store();
+        let hwnd = open_with(store.clone(), fake_clock_now, fake_picker).unwrap();
+        select_monday(hwnd);
+        // SAFETY: on the window's thread.
+        let tab = unsafe { state_of(hwnd) }.unwrap().layout(hwnd).tabs[0].1;
+        click(hwnd, tab.x + 5, tab.y + 5);
+        key(hwnd, 0x2e);
+        assert_eq!(store.borrow().schedule().classes(Weekday::Mon).len(), 1);
         close(hwnd);
     }
 }

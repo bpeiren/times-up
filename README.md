@@ -1,7 +1,7 @@
 # Time's up
 
-A small always-on-top class-hour timer for Windows. A bar on screen fills green, then orange, then
-red as the class hour runs out, so a teacher can keep track of time at a glance. A 100 minute class
+A small always-on-top class-hour timer for Windows. A bar on screen fills with the lesson colour, then the
+warning colour, then the final colour as the class hour runs out, so a teacher can keep track of time at a glance. A 100 minute class
 shows two blocks with a break in the middle.
 
 Written in Rust against the Win32 API (`windows` crate): one tiny exe, no installer, no runtime, and
@@ -18,12 +18,12 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   12:05), so edit it to your own timetable first.
 - A small icon in the notification area (maybe behind the `^` arrow) shows that the app is running,
   also when the bar is hidden. Click it for the same menu as a right-click on the bar.
-- The bar fills from the left in green; the last 10 minutes of a block are orange and the last 5 are
-  red. Thin lines on the unfilled part show where the colours change.
+- The bar fills from the left in the lesson colour; the last 10 minutes of a block are the warning
+  colour and the last 5 are the final colour. Thin lines on the unfilled part show where the colours change.
 - The text shows the time left in the current block, centred in that block; `Break mm:ss` during a
   break, centred on the break; or `Starts in mm:ss` before class.
 - Drag the bar to move it and its edges or corners to resize it; its place and size are remembered.
-- Drag the break, or an orange or red line, to change it for the class that is running. While you
+- Drag the break, or a warning or final line, to change it for the class that is running. While you
   drag, a small time at the bottom of the bar shows when that zone starts (`09:35`) or when the
   break starts and ends (`09:45-09:55`). The change is forgotten when the class is over, unless you
   right-click and choose *Save as default for this slot*.
@@ -32,13 +32,20 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   its place and size are remembered). It shows the week: click a class to select it, drag it to
   move it or drag its edges to resize it (5 minute steps, never over a neighbour), use the *+*
   button of a day to add a class, and *Remove class* or the Delete key to remove the selected one.
-  The selected class is drawn large below the week: drag the break or the orange and red lines,
+  The selected class is drawn large below the week: drag the break or the warning and final lines,
   hover for times and durations, *Add break* (click where it should start, Esc cancels) and *Remove
   break*. Changes are saved to `times-up.toml` when you let go of the mouse. If you change the
   break or the warning times of the class that is running while you have changed it on the bar
   too, a banner asks: *Replace* (Enter) puts the saved settings on the bar, *Save only* (Esc)
   keeps your temporary changes on the bar until the class ends. It asks once per running class;
   closing the window counts as *Save only*.
+- The *General* tab of the Settings window holds the rest, so the file never has to be opened: the
+  six colours of the bar (click a colour to choose another one in the Windows colour dialog, the
+  small bar above them previews the result, *Track opacity* and *Reset colours* are there too) and
+  the lead-in, the time the bar stays after the last class, the default break and the default
+  warning and final minutes (click *-* and *+*). Values that make no sense are refused with a message,
+  for example final minutes longer than the warning. Each change is saved to `times-up.toml` on the click, keeping
+  your comments and everything else in the file, and shows on the bar at once.
 
 Requirements: Windows 11, or Windows 10 version 1607 or later (sharp scaling on monitors with
 different DPI needs 1703), 64-bit. It has only been tried on Windows 11. Nothing else needs to be
@@ -55,24 +62,30 @@ app runs. A wrong value is reported, replaced by its default, and never stops th
 lead_in_minutes = 5          # the bar appears this long before a class starts
 linger_seconds = 10          # ...and stays this long after the last class ends
 default_break_minutes = 10   # break in the middle of classes of 100 minutes or more
-orange_minutes = 10          # the bar turns orange this long before the end of a block
-red_minutes = 5              # ...and red this long before the end
+warning_minutes = 10         # the bar turns to the warning colour this long before the end of a block
+final_minutes = 5            # ...and to the final colour this long before the end
 
 [colors]                     # #RRGGBB or #RRGGBBAA
-green = "#2ecc71"
-break = "#bdc3c7"            # also orange, red, track, text
+lesson = "#2ecc71"          # the colour while there is plenty of time left
+warning = "#f39c12"         # ...when the time gets short
+final = "#e74c3c"           # ...in the final minutes
+break = "#bdc3c7"            # also track, text
 
 [monday]                     # one section per weekday: monday ... friday
 classes = [
   { start = "08:30", end = "09:20" },                 # 50 minutes: one block
   { start = "10:25", end = "12:05" },                 # 100 minutes: two blocks and a break
-  { start = "13:00", end = "14:40", break_start = 40, break_len = 20, orange = [10, 8], red = [5, 4] },
+  { start = "13:00", end = "14:40", break_start = 40, break_len = 20, warning = [10, 8], final = [5, 4] },
 ]
 ```
 
-Per class, `break_start` and `break_len` (minutes; `break_len = 0` means no break) and `orange` and
-`red` (one value, or one per block) are optional. The app writes the `[window]` section and, for
+Per class, `break_start` and `break_len` (minutes; `break_len = 0` means no break) and `warning` and
+`final` (one value, or one per block) are optional. The app writes the `[window]` section and, for
 *Save as default for this slot*, those per-class keys itself, keeping your comments.
+
+Older files name the zones after their colours: `green`, `orange` and `red` in `[colors]`,
+`orange_minutes` and `red_minutes` in `[general]`, and `orange` and `red` per class. Those are still
+read; when the app writes a setting it uses the new name and removes the old one.
 
 ### Measured
 
@@ -134,6 +147,7 @@ logic.
 | `win::app` | Start-up, the per-second work, saving, menu commands |
 | `store` | The one owner of the loaded settings: the file poll and every edit go through it, views redraw when its revision changes, and the bar's temporary changes are kept apart from the saved timetable |
 | `settings`, `strings` | The Settings window's layout and frame as plain geometry; every UI text in one place |
+| `general` | The General tab: colours with a preview, lead-in, linger and the default minutes, with the rules for changing them |
 | `banner` | The Replace / Save only question for the running class: geometry and painting |
 | `timetable`, `detail` | The week overview and the detail bar of the selected class: editing rules, geometry and painting, without Win32 |
 | `win::settings_window` | The Settings window: a resizable window whose contents we draw |
