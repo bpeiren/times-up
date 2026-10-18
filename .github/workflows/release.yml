@@ -1,0 +1,108 @@
+# Builds and publishes the GitHub release when a version tag is pushed. scripts/release.ps1 prepares
+# the signed release commit and the tag on the maintainer's machine; this workflow turns that tag
+# into the zip, its checksum and the release. It never pushes a commit and holds no signing key.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+# Nothing by default; the one job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # create the release; the only place that needs it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Check the tag against the release commit
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($cargo -ne $version) { throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $cargo." }
+          if (-not (Test-Path "release-notes/$env:GITHUB_REF_NAME.md")) { throw "release-notes/$env:GITHUB_REF_NAME.md is missing." }
+          # The release commit must be on main (the tag was pushed after main).
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "The tagged commit $env:GITHUB_SHA is not on main." }
+
+      - name: cargo fmt, clippy
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Desktop probe
+        id: desktop
+        shell: pwsh
+        run: ./scripts/ci-tests.ps1 -ProbeOnly
+
+      - name: cargo test
+        shell: pwsh
+        run: ./scripts/ci-tests.ps1
+
+      # Same script as the local release: release build, exe dependency check, zip, <zip>.sha256 and
+      # the smoke test (skipped, with a warning, only when the runner has no desktop).
+      - name: Package
+        shell: pwsh
+        env:
+          DESKTOP: ${{ steps.desktop.outputs.desktop }}
+        run: |
+          if ($env:DESKTOP -eq 'true') {
+            ./scripts/package.ps1
+          } else {
+            Write-Host '::warning title=Smoke test skipped::No interactive desktop on this runner.'
+            ./scripts/package.ps1 -SkipSmoke
+          }
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag -replace '^v', ''
+          $name = "times-up-$version-win-x64"
+          $zip = "dist/$name.zip"
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $sumFile = "$zip.sha256"
+          if ((Get-Content $sumFile -Raw).Split(' ')[0] -ne $sha) { throw "$sumFile does not match the zip." }
+
+          # The committed notes plus the checksum of the zip built here, so the notes always match
+          # what is attached.
+          $notes = (Get-Content "release-notes/$tag.md" -Raw).TrimEnd()
+          $notes += "`n`n### Checksum`n`nSHA256 of ``$name.zip``:`n`n``````n$sha`n```````n"
+          $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
+          [IO.File]::WriteAllText($notesFile, $notes, (New-Object Text.UTF8Encoding($false)))
+
+          gh release create $tag --title "Time's up $version" --notes-file $notesFile --verify-tag $zip $sumFile
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed.' }

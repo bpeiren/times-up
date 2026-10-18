@@ -168,18 +168,36 @@ committed only when a version is released: `winget install --id orhun.git-cliff 
 
 ### Releasing
 
-`.\scripts\release.ps1` makes a release: it runs the checks (`cargo fmt --check`, clippy, tests, the
-package dependency check and smoke test), bumps the version, generates `CHANGELOG.md`,
-`release-notes\vX.Y.Z.md` (from `release-notes\template.md` and the commits) and the Measured table
-above, asks you to review the notes, commits everything as a signed `chore(release): X.Y.Z`, tags it,
-publishes the GitHub release with the zip and its `.sha256`, and checks the download.
-Without `-Publish` it is a dry run that does everything except the commit, push, tag and release,
-so nothing can be released by accident; `-Publish` releases for real (add `-Unattended` to skip the
-editor and every question, for automation); `-Version X.Y.Z` overrides the proposed version;
-`-Draft` and `-Prerelease` mark the release. It needs `gh` (logged in),
-[git-cliff](https://git-cliff.org) and a working commit signing setup. What to do when it stops at a
-given step is in `.\scripts\release.ps1 -Help` (or `Get-Help .\scripts\release.ps1 -Full`). `.\scripts\release.tests.ps1` tests its
-helpers.
+`.\scripts\release.ps1` prepares a release on the maintainer's machine: it runs the checks
+(`cargo fmt --check`, clippy, tests, the package dependency check and smoke test), bumps the version,
+generates `CHANGELOG.md`, `release-notes\vX.Y.Z.md` (from `release-notes\template.md` and the commits)
+and the Measured table above, asks you to review the notes, commits everything as a signed
+`chore(release): X.Y.Z`, tags it and pushes the tag. The tag starts the **Release** workflow
+(`.github/workflows/release.yml`): on a clean GitHub Windows runner it checks that the tag matches
+`Cargo.toml` and is on main, runs the same checks, builds the zip with `scripts\package.ps1` (the same
+script as locally, smoke test included when the runner has a desktop), appends the SHA256 of that zip
+to the committed notes and creates the GitHub release with the zip and its `.sha256`. The script
+waits for the run and checks the download. The workflow never pushes a commit and holds no signing
+key; only its release job has `contents: write`. The zip built in CI has the same files as a local
+one but is not byte-identical, so the checksum in the published notes is always the one of the
+attached zip.
+
+Without `-Publish` the script is a dry run that does everything except the commit, push and tag, so
+nothing can be released by accident; `-Publish` releases for real (add `-Unattended` to skip the
+editor and every question, for automation); `-Version X.Y.Z` overrides the proposed version. It needs
+`gh` (logged in), [git-cliff](https://git-cliff.org) and a working commit signing setup. What to do
+when it or the workflow stops at a given step (re-running a failed run, not moving a tag, publishing
+from your machine if CI is unavailable) is in `.\scripts\release.ps1 -Help` (or
+`Get-Help .\scripts\release.ps1 -Full`). `.\scripts\release.tests.ps1` tests its helpers.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and push to main on a Windows runner, as four parallel jobs:
+**Lint** (`cargo fmt --check`, `cargo clippy -D warnings`), **Test** (`cargo test`), **Build** (the
+release build with the exe dependency check) and **Release script tests**. A failing check does not block merging yet, but it is
+visible on the pull request. The window and tray tests need an interactive desktop;
+`scripts\ci-tests.ps1` skips only the `win::` tests, with a warning annotation, if the runner has
+none (locally nothing is skipped; set `TIMES_UP_REQUIRE_DESKTOP=1` to make that an error).
 
 ### License
 

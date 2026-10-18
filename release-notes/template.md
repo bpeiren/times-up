@@ -32,11 +32,3 @@ replaced.
 ### What's changed
 
 {{CHANGES}}
-
-### Checksum
-
-SHA256 of `{{ZIP}}`:
-
-```
-{{SHA256}}
-```

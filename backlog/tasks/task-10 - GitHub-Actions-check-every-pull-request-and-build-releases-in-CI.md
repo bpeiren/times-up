@@ -1,13 +1,24 @@
 ---
 id: TASK-10
 title: 'GitHub Actions: check every pull request and build releases in CI'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-15 03:49'
-updated_date: '2026-10-15 03:49'
+updated_date: '2026-10-18 06:45'
 labels: []
 dependencies:
   - TASK-9
+modified_files:
+  - .github/workflows/ci.yml
+  - .github/workflows/release.yml
+  - scripts/ci-tests.ps1
+  - scripts/release.ps1
+  - scripts/release-lib.ps1
+  - scripts/release.tests.ps1
+  - release-notes/template.md
+  - README.md
+  - AGENTS.md
 priority: low
 ordinal: 27000
 ---
@@ -37,3 +48,12 @@ Things to find out first: whether the window and tray tests (they create real wi
 - [ ] #1 All AC are met.
 - [ ] #2 All code is covered by sensible tests. All tests pass.
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. ci.yml: PR + push to main on windows-latest: fmt, clippy, tests via scripts/ci-tests.ps1 (skips win:: tests only if no desktop, with a warning), release build + exe dependency check, release script tests; contents: read; actions pinned to SHAs; cargo cache.
+2. release.yml: on tag vX.Y.Z: verify tag = Cargo.toml version and on main, gates, package.ps1, SHA256, append Checksum to committed notes, gh release create (contents: write only here).
+3. Split decided with the maintainer: release.ps1 stops at the pushed tag, then waits for the workflow and verifies the download; notes carry no checksum locally (CI appends it); -Draft/-Prerelease dropped.
+4. Document in release.ps1 help, README and AGENTS.md.
+<!-- SECTION:PLAN:END -->

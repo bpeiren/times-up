@@ -10,17 +10,26 @@
         signing works, Time's up not running.
      2. Gates: cargo fmt --check, clippy -D warnings, cargo test.
      3. Version bump in Cargo.toml and Cargo.lock.
-     4. scripts\package.ps1: release build, dependency check, zip, smoke test, measurement, and
-        <zip>.sha256 next to the zip.
+     4. scripts\package.ps1: release build, dependency check, zip, smoke test and measurement
+        (for the README; this zip is not what is published).
      5. CHANGELOG.md (git cliff --tag), release-notes\vX.Y.Z.md (hand-written template plus the
-        commits plus the zip's SHA256) and the Measured table of the README.
+        commits) and the Measured table of the README.
      6. The notes are opened in an editor; the release continues only after you confirm.
      7. Everything is shown; you confirm once more.
      8. One signed commit chore(release): X.Y.Z (retried when the signing agent fails), push of
-        main, annotated tag vX.Y.Z on that commit, push of the tag. Nothing is ever force-pushed.
-     9. gh release create with the notes, the zip and the checksum file.
+        main, signed annotated tag vX.Y.Z on that commit, push of the tag. Nothing is ever
+        force-pushed.
+     9. The tag starts .github\workflows\release.yml on GitHub, which builds the release on a
+        clean Windows runner (the same checks and scripts\package.ps1), appends the SHA256 of that
+        zip to the committed notes and creates the GitHub release with the zip and the .sha256
+        file. The script waits for that run.
     10. Verification: the asset is downloaded without authentication and its SHA256 must equal the
-        local zip and the notes; the tag must point at the release commit.
+        attached .sha256 file and the checksum in the published notes; the tag must point at the
+        release commit.
+
+    The release is built in CI, not on this machine, so the zip is not byte-identical to the one
+    packaged in step 4 (the zip stores file times). It has the same files, and the checksum in the
+    published notes is the one of the zip that is attached.
 
     If the release stops before step 8 (a failure, a declined confirmation, a dry run), the files it
     changed are restored, so the working tree is clean again.
@@ -36,15 +45,22 @@
     - After the commit, before the push of main: the commit is only local. Undo it with
       `git reset --hard origin/main` (the release is recreated by running the script again).
     - After main was pushed, before the tag: do not rewrite main. Create and push the tag by hand on
-      the release commit: `git tag -a vX.Y.Z -m "Time's up X.Y.Z" <commit>; git push origin vX.Y.Z`,
-      then create the release (see below).
-    - After the tag was pushed, before the release exists: the tag stays. Create the release by
-      hand: `gh release create vX.Y.Z --title "Time's up X.Y.Z" --notes-file release-notes\vX.Y.Z.md
-      dist\times-up-X.Y.Z-win-x64.zip dist\times-up-X.Y.Z-win-x64.zip.sha256`.
+      the release commit: `git tag -a -s vX.Y.Z -m "Time's up X.Y.Z" <commit>; git push origin vX.Y.Z`;
+      the workflow then publishes the release.
+    - After the tag was pushed and the workflow failed (`gh run list --workflow release.yml`, then
+      `gh run view <id> --log-failed`): when the cause was temporary (a runner or network error),
+      run it again with `gh run rerun <id> --failed`. When the build or a check failed, the
+      release commit is broken: do not move the tag. Fix main with a new commit and release the
+      next patch version. If no release was published for the broken tag, it may be deleted with
+      `git push origin --delete vX.Y.Z`; mention it in the next release.
+    - If the workflow cannot be used at all, publish from this machine: `.\scripts\package.ps1`,
+      then `gh release create vX.Y.Z --title "Time's up X.Y.Z" --notes-file <the committed notes plus
+      a Checksum section with the SHA256 of the zip> dist\times-up-X.Y.Z-win-x64.zip
+      dist\times-up-X.Y.Z-win-x64.zip.sha256`.
     - After the release exists but the verification failed: look at the release on GitHub, and
       re-upload the assets with `gh release upload vX.Y.Z <file> --clobber`, or delete the release
-      with `gh release delete vX.Y.Z` (the tag is kept) and create it again. Never move a tag that
-      was pushed; a broken release gets a new patch version instead.
+      with `gh release delete vX.Y.Z` (the tag is kept) and run the workflow again. Never move a tag
+      that was pushed; a broken release gets a new patch version instead.
 
 .PARAMETER Version
     The version to release (X.Y.Z). Without it the next version is proposed from the commits
@@ -64,20 +80,13 @@
 .PARAMETER Help
     Shows this help (the same as Get-Help .\scripts\release.ps1 -Full) and exits.
 
-.PARAMETER Draft
-    Create the GitHub release as a draft. The unauthenticated download check is skipped (a draft
-    is not public); the asset is downloaded with gh instead.
-
-.PARAMETER Prerelease
-    Mark the GitHub release as a pre-release.
-
 .EXAMPLE
     .\scripts\release.ps1
     A dry run: shows what a release would do and changes nothing.
 
 .EXAMPLE
-    .\scripts\release.ps1 -Publish -Version 0.1.0 -Draft
-    A real release as a draft, with the usual questions.
+    .\scripts\release.ps1 -Publish -Version 0.1.0
+    A real release with the usual questions.
 
 .EXAMPLE
     .\scripts\release.ps1 -Publish -Unattended
@@ -88,8 +97,6 @@ param(
     [string]$Version,
     [switch]$Publish,
     [switch]$Unattended,
-    [switch]$Draft,
-    [switch]$Prerelease,
     [switch]$Help
 )
 
@@ -230,7 +237,7 @@ $zipPath = "dist\$name.zip"
 $shaPath = "$zipPath.sha256"
 $notesPath = "release-notes\$tag.md"
 $touched = 'Cargo.toml', 'Cargo.lock', 'CHANGELOG.md', 'README.md'
-$stage = 'prepare' # prepare -> committed -> main-pushed -> tag-pushed -> released
+$stage = 'prepare' # prepare -> committed -> main-pushed -> tag-pushed -> building -> released
 $measureFile = Join-Path ([IO.Path]::GetTempPath()) "times-up-measure-$([guid]::NewGuid().ToString('N')).json"
 
 try {
@@ -254,7 +261,7 @@ try {
     Invoke-Checked 'git cliff (changelog)' { git cliff --tag $tag -o CHANGELOG.md 2>$null }
     $changes = Get-ChangesBody (Get-Output 'git cliff (notes)' { git cliff --unreleased --tag $tag --strip all })
     if (-not $changes) { throw 'There are no changes to release (no feat, fix, perf, refactor, build or docs commits).' }
-    $notes = New-ReleaseNotes (Read-Text 'release-notes\template.md') $Version "$name.zip" $sha $changes
+    $notes = New-ReleaseNotes (Read-Text 'release-notes\template.md') $Version "$name.zip" $changes
     Write-Text $notesPath $notes
     $measure = Get-Content $measureFile -Raw | ConvertFrom-Json
     Write-Text 'README.md' (Update-MeasuredTable (Read-Text 'README.md') $measure)
@@ -268,9 +275,9 @@ try {
         Write-Host "   1. git commit -S: chore(release): $Version  ($($touched -join ', '), $notesPath)"
         Write-Host '   2. git push origin main'
         Write-Host "   3. git tag -a $tag on that commit; git push origin $tag"
-        Write-Host "   4. gh release create $tag$(if ($Draft) { ' --draft' })$(if ($Prerelease) { ' --prerelease' }) with $zipPath and $shaPath"
-        Write-Host "   5. download the asset without authentication, compare SHA256 ($sha) with the zip and the notes, check the tag"
-        Write-Host "   Release notes kept at $kept; zip at $zipPath"
+        Write-Host "   4. the tag starts the Release workflow, which builds the zip in CI and creates the GitHub release"
+        Write-Host "   5. wait for the workflow, download the asset without authentication, compare its SHA256 with the .sha256 asset and the published notes, check the tag"
+        Write-Host "   Release notes kept at $kept; the local test zip at $zipPath (SHA256 $sha, not what is published)"
         Write-Host '   This was a dry run. Add -Publish to release for real.'
         Write-Host '   Changed by the generation (restored now):'
         Invoke-Checked 'git diff' { git diff --stat }
@@ -284,15 +291,12 @@ try {
         Write-Host "== Review the release notes: $notesPath"
         $editor = if ($env:RELEASE_EDITOR) { $env:RELEASE_EDITOR } else { 'notepad.exe' }
         Start-Process $editor -ArgumentList ('"' + (Join-Path $root $notesPath) + '"') -Wait
-        $notes = Read-Text $notesPath
-        if (-not $notes.Contains($sha)) { throw "The reviewed notes no longer contain the zip's SHA256 ($sha)." }
     }
     Write-Host ''
-    Write-Host "   Release $tag$(if ($Draft) { ' (draft)' })$(if ($Prerelease) { ' (pre-release)' })"
-    Write-Host "   Zip $zipPath, SHA256 $sha"
+    Write-Host "   Release $tag (built and published by the Release workflow)"
     Invoke-Checked 'git diff' { git diff --stat }
-    if (-not $Unattended -and -not (Confirm-Step 'Notes reviewed. Commit, push, tag and publish now?')) {
-        Write-Host 'Declined: nothing was committed or published; the changed files are restored.'
+    if (-not $Unattended -and -not (Confirm-Step 'Notes reviewed. Commit, push and tag now (this starts the release workflow)?')) {
+        Write-Host 'Declined: nothing was committed, pushed or tagged; the changed files are restored.'
         return
     }
 
@@ -308,37 +312,39 @@ try {
     Invoke-Checked 'git push tag' { git push origin $tag }
     $stage = 'tag-pushed'
 
-    # ---- 9. GitHub release ----
-    Write-Host '== GitHub release'
-    $ghArgs = @('release', 'create', $tag, '--title', "Time's up $Version", '--notes-file', $notesPath, '--verify-tag')
-    if ($Draft) { $ghArgs += '--draft' }
-    if ($Prerelease) { $ghArgs += '--prerelease' }
-    $ghArgs += $zipPath, $shaPath
-    Invoke-Checked 'gh release create' { gh @ghArgs }
+    # ---- 9. the release workflow builds and publishes ----
+    Write-Host '== Release workflow (builds the zip on GitHub and creates the release)'
+    $stage = 'building'
+    $runId = $null
+    $query = ".[] | select(.headSha == `"$commit`") | .databaseId"
+    for ($try = 1; $try -le 30 -and -not $runId; $try++) {
+        $runs = Get-Output 'gh run list' { gh run list --workflow release.yml --event push --limit 10 --json databaseId,headSha --jq $query }
+        $runId = ($runs -split "`n" | Select-Object -First 1)
+        if (-not $runId) { Start-Sleep -Seconds 4 }
+    }
+    if (-not $runId) { throw "The Release workflow did not start for $tag (see the Actions tab on GitHub)." }
+    Write-Host "   Run $runId"
+    Invoke-Checked 'gh run watch' { gh run watch $runId --exit-status --interval 10 }
     $stage = 'released'
 
     # ---- 10. verification ----
     Write-Host '== Verifying the published release'
     $repo = Get-Output 'gh repo view' { gh repo view --json nameWithOwner --jq .nameWithOwner }
+    $base = "https://github.com/$repo/releases/download/$tag"
     $download = Join-Path ([IO.Path]::GetTempPath()) "$name-verify-$([guid]::NewGuid().ToString('N')).zip"
     try {
-        if ($Draft) {
-            Write-Host '   Draft: not public, so downloaded with gh instead of anonymously.'
-            Invoke-Checked 'gh release download' { gh release download $tag --pattern "$name.zip" --output $download --clobber }
-        } else {
-            $url = "https://github.com/$repo/releases/download/$tag/$name.zip"
-            Invoke-WebRequest -Uri $url -OutFile $download -UseBasicParsing
-        }
+        Invoke-WebRequest -Uri "$base/$name.zip" -OutFile $download -UseBasicParsing
         $remoteSha = (Get-FileHash $download -Algorithm SHA256).Hash.ToLower()
+        $attached = ([Text.Encoding]::UTF8.GetString((Invoke-WebRequest -Uri "$base/$name.zip.sha256" -UseBasicParsing).Content)).Trim().Split(' ')[0]
     } finally {
         Remove-Item $download -Force -ErrorAction SilentlyContinue
     }
-    if ($remoteSha -ne $sha) { throw "Downloaded zip has SHA256 $remoteSha, expected $sha." }
+    if ($remoteSha -ne $attached) { throw "Downloaded zip has SHA256 $remoteSha but the attached checksum file says $attached." }
     $body = Get-Output 'gh release view' { gh release view $tag --json body --jq .body }
-    if (-not $body.Contains($sha)) { throw 'The published release notes do not contain the zip SHA256.' }
+    if (-not $body.Contains($remoteSha)) { throw 'The published release notes do not contain the SHA256 of the attached zip.' }
     $peeled = Get-Output 'git ls-remote' { git ls-remote origin "refs/tags/$tag^{}" }
     if (-not $peeled.StartsWith($commit)) { throw "The tag $tag on origin does not point at the release commit $commit ($peeled)." }
-    Write-Host "   OK: download matches ($sha), notes contain it, $tag points at $commit"
+    Write-Host "   OK: download matches ($remoteSha), notes contain it, $tag points at $commit"
     Write-Host "== Released $tag"
 } catch {
     Write-Host ''
@@ -347,8 +353,9 @@ try {
         'prepare'     { Write-Host 'Nothing outward-facing happened; the changed files are restored. Fix the cause and run the script again.' }
         'committed'   { Write-Host 'The release commit exists only locally. Undo it with: git reset --hard origin/main   (then run the script again)' }
         'main-pushed' { Write-Host "main was pushed but the tag was not. Do not rewrite main. Tag the release commit by hand: git tag -a $tag -m ""Time's up $Version"" <commit>; git push origin $tag; then create the release (see the help of this script)." }
-        'tag-pushed'  { Write-Host "The tag $tag is pushed but the release was not created. Create it by hand: gh release create $tag --title ""Time's up $Version"" --notes-file $notesPath $zipPath $shaPath" }
-        'released'    { Write-Host "The release exists but the check failed. Look at it on GitHub; fix assets with gh release upload $tag <file> --clobber, or gh release delete $tag and create it again. Never move a pushed tag." }
+        'tag-pushed'  { Write-Host "The tag $tag is pushed but the Release workflow did not start. Look at the Actions tab (gh run list --workflow release.yml), or publish from this machine (see the help of this script)." }
+        'building'    { Write-Host "The Release workflow failed or was interrupted. Read gh run list --workflow release.yml and gh run view <id> --log-failed; rerun a temporary failure with gh run rerun <id> --failed. Do not move the tag (see the help of this script)." }
+        'released'    { Write-Host "The release exists but the check failed. Look at it on GitHub; fix assets with gh release upload $tag <file> --clobber, or gh release delete $tag and rerun the workflow. Never move a pushed tag." }
     }
     $global:LASTEXITCODE = 1
     throw
