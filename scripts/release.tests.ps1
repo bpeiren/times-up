@@ -127,6 +127,19 @@ Test-Case 'the real README has a Measured table the script can refresh' {
     $null = Update-MeasuredTable $text $m
 }
 
+Test-Case 'the release script is a dry run unless -Publish is given, and has -Unattended and -Help' {
+    $params = (Get-Command (Join-Path $PSScriptRoot 'release.ps1')).Parameters.Keys
+    foreach ($p in 'Publish', 'Unattended', 'Help', 'Version', 'Draft', 'Prerelease') {
+        if ($p -notin $params) { throw "release.ps1 has no -$p" }
+    }
+    if ('DryRun' -in $params) { throw 'release.ps1 must not have -DryRun: a dry run is the default' }
+}
+
+Test-Case 'release.ps1 -Help shows the help and changes nothing' {
+    $out = (& (Join-Path $PSScriptRoot 'release.ps1') -Help | Out-String)
+    if ($out -notmatch 'Publish' -or $out -notmatch 'Unattended') { throw 'the help does not describe -Publish and -Unattended' }
+}
+
 Write-Host ''
 Write-Host "$script:passed passed, $script:failed failed"
 if ($script:failed -gt 0) { exit 1 }

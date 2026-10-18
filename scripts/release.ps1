@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Releases Time's up: checks, version bump, changelog, notes, package, signed commit, tag and
-    GitHub release, then verifies the published download.
+    GitHub release, then verifies the published download. Without -Publish it is a dry run.
 
 .DESCRIPTION
     Flow (nothing outward-facing happens before step 8):
@@ -22,8 +22,14 @@
     10. Verification: the asset is downloaded without authentication and its SHA256 must equal the
         local zip and the notes; the tag must point at the release commit.
 
-    If the release stops before step 8 (a failure, a declined confirmation, -DryRun), the files it
+    If the release stops before step 8 (a failure, a declined confirmation, a dry run), the files it
     changed are restored, so the working tree is clean again.
+
+    Safe by default: without -Publish the script only does the local work (steps 1 to 5), prints
+    the plan and restores the files. -Publish does the whole release, with the questions of steps
+    6 and 7. -Publish -Unattended does it without any question or editor, for automation: the
+    version is the given -Version or else the one proposed from the commits, and the generated
+    notes are used as they are, so nobody reviews them.
 
     What to do after a failure:
     - Before step 8: nothing. Fix the cause and run the script again. dist\ keeps the zip.
@@ -44,10 +50,19 @@
     The version to release (X.Y.Z). Without it the next version is proposed from the commits
     (git cliff --bumped-version, see [bump] in cliff.toml) and you are asked to confirm it.
 
-.PARAMETER DryRun
-    Does the preflight, the gates, the build and the generation, prints the plan, restores the
-    files and stops before the commit, push, tag and release. No editor and no questions in a dry
-    run. The generated notes are kept in dist\.
+.PARAMETER Publish
+    Really do the release: commit, push, tag and GitHub release. Without it the script is a dry
+    run: it does the preflight, the gates, the build and the generation, prints the plan,
+    restores the files and stops before the commit, push, tag and release. There is no editor and
+    there are no questions in a dry run. The generated notes are kept in dist\.
+
+.PARAMETER Unattended
+    With -Publish: no questions and no editor. The version is -Version or, without it, the one
+    proposed from the commits; the notes are not reviewed by a person. Without -Publish it changes
+    nothing (a dry run asks nothing anyway).
+
+.PARAMETER Help
+    Shows this help (the same as Get-Help .\scripts\release.ps1 -Full) and exits.
 
 .PARAMETER Draft
     Create the GitHub release as a draft. The unauthenticated download check is skipped (a draft
@@ -57,18 +72,35 @@
     Mark the GitHub release as a pre-release.
 
 .EXAMPLE
-    .\scripts\release.ps1 -DryRun
-    .\scripts\release.ps1 -Version 0.1.0 -Draft
+    .\scripts\release.ps1
+    A dry run: shows what a release would do and changes nothing.
+
+.EXAMPLE
+    .\scripts\release.ps1 -Publish -Version 0.1.0 -Draft
+    A real release as a draft, with the usual questions.
+
+.EXAMPLE
+    .\scripts\release.ps1 -Publish -Unattended
+    A real release without questions, for automation.
 #>
 [CmdletBinding()]
 param(
     [string]$Version,
-    [switch]$DryRun,
+    [switch]$Publish,
+    [switch]$Unattended,
     [switch]$Draft,
-    [switch]$Prerelease
+    [switch]$Prerelease,
+    [switch]$Help
 )
 
+if ($Help) {
+    Get-Help $PSCommandPath -Full
+    return
+}
+
 $ErrorActionPreference = 'Stop'
+# Safe by default: only -Publish releases for real.
+$DryRun = -not $Publish
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 . (Join-Path $PSScriptRoot 'release-lib.ps1')
@@ -168,7 +200,7 @@ if ($Version) {
 } elseif (Get-Command git-cliff -ErrorAction SilentlyContinue) {
     $proposed = (Get-Output 'git cliff --bumped-version' { git cliff --bumped-version }) -replace '^v', ''
     Write-Host "   Proposed version from the commits: $proposed (latest tag: v$latest)"
-    if ($DryRun -or (Confirm-Step "Release $proposed")) {
+    if ($DryRun -or $Unattended -or (Confirm-Step "Release $proposed")) {
         $Version = $proposed
     } else {
         $problems.Add('No version confirmed (use -Version X.Y.Z to choose one).')
@@ -239,22 +271,27 @@ try {
         Write-Host "   4. gh release create $tag$(if ($Draft) { ' --draft' })$(if ($Prerelease) { ' --prerelease' }) with $zipPath and $shaPath"
         Write-Host "   5. download the asset without authentication, compare SHA256 ($sha) with the zip and the notes, check the tag"
         Write-Host "   Release notes kept at $kept; zip at $zipPath"
+        Write-Host '   This was a dry run. Add -Publish to release for real.'
         Write-Host '   Changed by the generation (restored now):'
         Invoke-Checked 'git diff' { git diff --stat }
         return
     }
 
-    # ---- 6. review of the notes ----
-    Write-Host "== Review the release notes: $notesPath"
-    $editor = if ($env:RELEASE_EDITOR) { $env:RELEASE_EDITOR } else { 'notepad.exe' }
-    Start-Process $editor -ArgumentList ('"' + (Join-Path $root $notesPath) + '"') -Wait
-    $notes = Read-Text $notesPath
-    if (-not $notes.Contains($sha)) { throw "The reviewed notes no longer contain the zip's SHA256 ($sha)." }
+    # ---- 6. review of the notes (not when unattended) ----
+    if ($Unattended) {
+        Write-Host "== Unattended: the notes are used as generated ($notesPath)"
+    } else {
+        Write-Host "== Review the release notes: $notesPath"
+        $editor = if ($env:RELEASE_EDITOR) { $env:RELEASE_EDITOR } else { 'notepad.exe' }
+        Start-Process $editor -ArgumentList ('"' + (Join-Path $root $notesPath) + '"') -Wait
+        $notes = Read-Text $notesPath
+        if (-not $notes.Contains($sha)) { throw "The reviewed notes no longer contain the zip's SHA256 ($sha)." }
+    }
     Write-Host ''
     Write-Host "   Release $tag$(if ($Draft) { ' (draft)' })$(if ($Prerelease) { ' (pre-release)' })"
     Write-Host "   Zip $zipPath, SHA256 $sha"
     Invoke-Checked 'git diff' { git diff --stat }
-    if (-not (Confirm-Step 'Notes reviewed. Commit, push, tag and publish now?')) {
+    if (-not $Unattended -and -not (Confirm-Step 'Notes reviewed. Commit, push, tag and publish now?')) {
         Write-Host 'Declined: nothing was committed or published; the changed files are restored.'
         return
     }

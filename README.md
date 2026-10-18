@@ -159,10 +159,12 @@ package dependency check and smoke test), bumps the version, generates `CHANGELO
 `release-notes\vX.Y.Z.md` (from `release-notes\template.md` and the commits) and the Measured table
 above, asks you to review the notes, commits everything as a signed `chore(release): X.Y.Z`, tags it,
 publishes the GitHub release with the zip and its `.sha256`, and checks the download.
-`-DryRun` does everything except the commit, push, tag and release; `-Version X.Y.Z` overrides the
-proposed version; `-Draft` and `-Prerelease` mark the release. It needs `gh` (logged in),
+Without `-Publish` it is a dry run that does everything except the commit, push, tag and release,
+so nothing can be released by accident; `-Publish` releases for real (add `-Unattended` to skip the
+editor and every question, for automation); `-Version X.Y.Z` overrides the proposed version;
+`-Draft` and `-Prerelease` mark the release. It needs `gh` (logged in),
 [git-cliff](https://git-cliff.org) and a working commit signing setup. What to do when it stops at a
-given step is in `Get-Help .\scripts\release.ps1 -Full`. `.\scripts\release.tests.ps1` tests its
+given step is in `.\scripts\release.ps1 -Help` (or `Get-Help .\scripts\release.ps1 -Full`). `.\scripts\release.tests.ps1` tests its
 helpers.
 
 ### License

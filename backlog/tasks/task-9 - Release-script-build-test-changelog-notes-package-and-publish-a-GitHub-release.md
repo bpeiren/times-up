@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-15 03:41'
-updated_date: '2026-10-17 21:16'
+updated_date: '2026-10-18 05:50'
 labels: []
 dependencies: []
 modified_files:
@@ -79,4 +79,6 @@ Possible later step: build and publish from GitHub Actions instead of locally, w
 
 <!-- SECTION:NOTES:BEGIN -->
 Verified: scripts/release.tests.ps1 (10 helper tests, pass on pwsh 7 and Windows PowerShell 5.1); parse of all scripts; -DryRun in a throwaway clone whose origin was a local bare repo (all preflight checks passed, gates, bump to 0.0.2, package with smoke test and measurement, changelog, notes, README table, tree restored, no tag/commit/push); preflight failure output on the real worktree. NOT run for real: the signed commit/push/tag, gh release create, the unauthenticated download check (AC 6, 7, 8) and the editor review/confirmation (AC 12, interactive). The first real release should use -Draft (the check then downloads with gh) to see those steps. Design: gates run on the unbumped tree, the dependency check runs inside package.ps1 after the bump; a dry run or declined/failed release restores Cargo.toml, Cargo.lock, CHANGELOG.md, README.md and removes the notes; dry run skips the editor and questions; RELEASE_NOTES.md moved to release-notes/v0.0.1.md; cliff [bump] makes feat bump the patch in 0.x.
+
+Changed after review: the script is a dry run unless -Publish is given (no -DryRun switch any more); -Publish -Unattended releases without the editor and without any question, for automation (the notes are then not reviewed by a person); -Help shows the built-in help. AC 1 and 9 read -DryRun in their text; the dry run is now the default.
 <!-- SECTION:NOTES:END -->
