@@ -24,7 +24,7 @@ const NEW_GAP: Secs = 10 * MINUTE;
 const FIRST_START: Secs = hm(8, 30);
 
 // Logical sizes at 96 DPI.
-const LABEL_W: f32 = 120.0;
+const LABEL_W: f32 = 132.0;
 const HOURS_H: f32 = 26.0;
 const FOOTER_H: f32 = 52.0;
 const SIDE: f32 = 12.0;
@@ -965,9 +965,9 @@ mod tests {
         let c = store.schedule().classes(MON)[0].clone();
         let (x, y) = middle(&view, &store, &c);
         press_at(&mut view, &mut store, x, y);
-        // About 62 minutes later on a 9 hour axis over ~700 pixels.
+        // An hour later on a 9 hour axis over ~700 pixels.
         let l = lay(&view, &store);
-        drag_at(&mut view, &store, x + l.x_of(hm(10, 2)) - l.x_of(hm(9, 0)));
+        drag_at(&mut view, &store, x + l.x_of(hm(10, 0)) - l.x_of(hm(9, 0)));
         assert!(view.is_dragging());
         assert_eq!(
             monday(&store),
