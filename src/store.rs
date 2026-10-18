@@ -111,12 +111,15 @@ impl Store {
 
     /// Make the temporary version the saved one in memory (after it was written to the file as
     /// the default of its slot).
+    ///
+    /// The saved timetable changed, so the revision moves and the Settings window redraws.
     pub fn commit_live(&mut self) {
         let index = self.live_base().map(|(index, _)| index);
         if let (Some(live), Some(index)) = (self.live.take(), index)
             && let Some(class) = self.config.schedule.class_mut(live.day, index)
         {
             *class = live.class;
+            self.revision += 1;
         }
     }
 
@@ -429,6 +432,16 @@ mod tests {
         store.commit_live();
         assert!(store.live().is_none());
         assert_eq!(store.schedule().classes(Weekday::Mon)[0], live);
+    }
+
+    #[test]
+    fn committing_moves_the_revision_so_the_settings_window_redraws() {
+        let (_dir, mut store, _) = with_live("live-commit-revision");
+        let before = store.revision();
+        store.commit_live();
+        assert_eq!(store.revision(), before + 1);
+        store.commit_live();
+        assert_eq!(store.revision(), before + 1, "nothing left to commit");
     }
 
     #[test]
