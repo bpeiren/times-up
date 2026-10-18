@@ -30,7 +30,8 @@ text = "#ffffff"
 
 # One section per weekday (monday ... friday). Times are 24-hour HH:MM.
 # A class of 100 minutes or more gets a break in the middle. Optional per class, in minutes:
-#   break_start = 45, break_len = 10 (0 = no break), warning = [10, 10], final = [5, 5]  (one value per block)
+#   breaks = [{ start = 45, len = 10 }]  (from the class start; several are fine, [] = no break)
+#   warning = [10, 10], final = [5, 5]   (one value for every block, or one per block)
 [monday]
 classes = [
   { start = "08:30", end = "09:20" },
