@@ -347,13 +347,8 @@ impl Detail {
                 let key = Self::key(day, &class);
                 self.adding = (self.adding != Some(key)).then_some(key);
             }
-            Target::RemoveBreak if self.chosen_for(day, &class).is_some() => {
-                self.adding = None;
-                let n = self.chosen_for(day, &class).unwrap_or_default();
-                self.chosen = None;
-                if let Ok(without) = class.remove_break(n) {
-                    self.save(store, day, index, without);
-                }
+            Target::RemoveBreak => {
+                self.remove_selected_break(store, selection);
             }
             Target::Bar if self.adding_for(day, &class) => {
                 let len = store.config().default_break;
@@ -390,6 +385,28 @@ impl Detail {
             }
             _ => {}
         }
+    }
+
+    /// Remove the selected break, if there is one (the Remove break button and the Delete key).
+    /// Returns whether there was one.
+    pub fn remove_selected_break(
+        &mut self,
+        store: &mut Store,
+        selection: Option<(Weekday, usize)>,
+    ) -> bool {
+        let Some((day, index, class)) = selected_class(store, selection) else {
+            return false;
+        };
+        let Some(n) = self.chosen_for(day, class) else {
+            return false;
+        };
+        let class = class.clone();
+        self.adding = None;
+        self.chosen = None;
+        if let Ok(without) = class.remove_break(n) {
+            self.save(store, day, index, without);
+        }
+        true
     }
 
     /// The pointer moved. Returns whether the detail bar has to be repainted.

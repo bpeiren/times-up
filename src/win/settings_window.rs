@@ -351,7 +351,13 @@ impl State {
         if self.section != Section::Timetable {
             return;
         }
-        self.timetable.remove_selected(&mut self.store.borrow_mut());
+        let mut store = self.store.borrow_mut();
+        let selection = self.timetable.selected(&store);
+        // Delete takes out the selected break if there is one, otherwise the selected class.
+        if !self.detail.remove_selected_break(&mut store, selection) {
+            self.timetable.remove_selected(&mut store);
+        }
+        drop(store);
         self.after_edit();
         invalidate(hwnd);
     }
@@ -1289,6 +1295,23 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         assert_eq!(
             store.borrow().live_schedule().classes(Weekday::Mon),
             store.borrow().schedule().classes(Weekday::Mon)
+        );
+        close(hwnd);
+    }
+
+    #[test]
+    fn delete_removes_the_selected_break_and_only_then_the_class() {
+        let (_dir, store, hwnd) = running_with_live("delete-break");
+        let l = select_monday(hwnd);
+        click(hwnd, l.bar.x + l.bar.w / 2, l.bar.y + l.bar.h / 2);
+        key(hwnd, 0x2e);
+        let classes = store.borrow().schedule().classes(Weekday::Mon).to_vec();
+        assert_eq!(classes.len(), 1, "the class stays");
+        assert!(classes[0].breaks.is_empty(), "the break goes");
+        key(hwnd, 0x2e);
+        assert!(
+            store.borrow().schedule().classes(Weekday::Mon).is_empty(),
+            "nothing is selected inside the class any more"
         );
         close(hwnd);
     }

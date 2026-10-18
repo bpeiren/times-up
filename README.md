@@ -34,7 +34,7 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   button of a day to add a class, and *Remove class* or the Delete key to remove the selected one.
   The selected class is drawn large below the week: drag the break or the warning and final lines,
   hover for times and durations, *Add break* (click where it should be, Esc cancels; as many as fit,
-  at least 5 minutes of lesson around each) and *Remove break* (click a break to select it first). Changes are saved to `times-up.toml` when you let go of the mouse. If you change the
+  at least 5 minutes of lesson around each) and *Remove break* (click a break to select it first; the Delete key does the same, and removes the class when no break is selected). Changes are saved to `times-up.toml` when you let go of the mouse. If you change the
   break or the warning times of the class that is running while you have changed it on the bar
   too, a banner asks: *Replace* (Enter) puts the saved settings on the bar, *Save only* (Esc)
   keeps your temporary changes on the bar until the class ends. It asks once per running class;
