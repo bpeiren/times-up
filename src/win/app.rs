@@ -471,9 +471,11 @@ mod tests {
         let mut canvas = Canvas::new(500, 50);
         assert!(app.draw_at(&mut canvas, MON, hm(9, 0) + 25 * MINUTE));
 
-        let green = config::Colors::default().green;
-        let solid_green =
-            0xff00_0000 | u32::from(green.r) << 16 | u32::from(green.g) << 8 | u32::from(green.b);
+        let lesson = config::Colors::default().lesson;
+        let solid_green = 0xff00_0000
+            | u32::from(lesson.r) << 16
+            | u32::from(lesson.g) << 8
+            | u32::from(lesson.b);
         assert_eq!(canvas.pixel(20, 25), solid_green, "left half is filled");
         assert_ne!(canvas.pixel(480, 25), solid_green, "right half is not");
         assert_eq!(canvas.pixel(0, 0) >> 24, 0, "rounded corner");
@@ -531,7 +533,7 @@ mod tests {
     #[test]
     fn colours_come_from_the_config() {
         let mut app = app_with(vec![class(hm(9, 0), hm(9, 50))]);
-        app.store.borrow_mut().config_mut().colors.green = Rgba::rgb(10, 20, 30);
+        app.store.borrow_mut().config_mut().colors.lesson = Rgba::rgb(10, 20, 30);
         let mut canvas = Canvas::new(500, 50);
         app.draw_at(&mut canvas, MON, hm(9, 25));
         assert_eq!(canvas.pixel(20, 25), 0xff0a_141e);
@@ -559,7 +561,10 @@ mod tests {
         fs::write(&path, "[colors]\ngreen = \"#010203\"\n[tuesday]\nclasses = [{ start = \"08:00\", end = \"08:50\" }]\n").unwrap();
         let mut canvas = Canvas::new(100, 20);
         let _ = Handler::draw(&mut app, &mut canvas); // polls the file, then draws "now"
-        assert_eq!(app.store.borrow().config().colors.green, Rgba::rgb(1, 2, 3));
+        assert_eq!(
+            app.store.borrow().config().colors.lesson,
+            Rgba::rgb(1, 2, 3)
+        );
         assert!(app.store.borrow().live_schedule().classes(MON).is_empty());
         assert_eq!(
             app.store
@@ -915,17 +920,17 @@ mod tests {
     #[test]
     fn zone_boundaries_can_be_dragged() {
         let mut app = two_double_classes();
-        // Orange of block 1 begins 10 minutes before its end (at 35 minutes = 350 px).
+        // Warning of block 1 begins 10 minutes before its end (at 35 minutes = 350 px).
         assert!(app.grab_at(MON, NOW, 350, W, H));
-        app.move_grab(20); // 2 minutes later: 8 minutes of orange left
+        app.move_grab(20); // 2 minutes later: 8 minutes of warning left
         let w = app.store.borrow().live_schedule().classes(MON)[0].warnings[0];
-        assert_eq!((w.orange / MINUTE, w.red / MINUTE), (8, 5));
-        // And the red boundary of the second block (at 95 minutes = 950 px).
+        assert_eq!((w.warning / MINUTE, w.final_ / MINUTE), (8, 5));
+        // And the final boundary of the second block (at 95 minutes = 950 px).
         app.grab_end();
         assert!(app.grab_at(MON, NOW, 950, W, H));
         app.move_grab(-20);
         let w = app.store.borrow().live_schedule().classes(MON)[0].warnings[1];
-        assert_eq!((w.orange / MINUTE, w.red / MINUTE), (10, 7));
+        assert_eq!((w.warning / MINUTE, w.final_ / MINUTE), (10, 7));
     }
 
     #[test]
@@ -1128,9 +1133,9 @@ mod tests {
         assert!(app.grab_at(MON, NOW, 500, W, H));
         app.move_grab(100); // break 55..65
         app.grab_end();
-        // The first block now ends at 55 minutes, so its orange zone begins at 45 minutes.
+        // The first block now ends at 55 minutes, so its warning zone begins at 45 minutes.
         assert!(app.grab_at(MON, NOW, 450, W, H));
-        app.move_grab(20); // 2 minutes later: 8 minutes of orange
+        app.move_grab(20); // 2 minutes later: 8 minutes of warning
         app.grab_end();
         let edited = app.store.borrow().live_schedule().classes(MON)[0].clone();
 
@@ -1361,7 +1366,7 @@ mod tests {
     #[test]
     fn dragging_a_zone_boundary_shows_its_start_time_small_at_the_bottom() {
         let mut app = two_double_classes();
-        // The orange boundary of the first block is at 35 minutes = 350 px (09:35).
+        // The warning boundary of the first block is at 35 minutes = 350 px (09:35).
         assert!(app.grab_at(MON, NOW, 350, 1000, 60));
         let canvas = drawn(&mut app, NOW);
         let label =
@@ -1425,7 +1430,7 @@ mod tests {
     #[test]
     fn the_time_label_stays_on_the_bar_near_its_ends() {
         let mut app = two_double_classes();
-        // The red boundary of the second block is at 95 minutes = 950 px, near the right end.
+        // The final boundary of the second block is at 95 minutes = 950 px, near the right end.
         assert!(app.grab_at(MON, NOW, 950, 1000, 60));
         let canvas = drawn(&mut app, NOW);
         let label = ink_box(&canvas, 800, 1000, STRIP.0, STRIP.1).expect("label");

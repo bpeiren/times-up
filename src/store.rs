@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use crate::config::{Config, ConfigError, ConfigFile, WindowRect};
+use crate::config::{Colors, Config, ConfigError, ConfigFile, General, WindowRect};
 use crate::schedule::{Class, Schedule, Weekday};
 
 /// A temporary version of a class that is running, changed on the bar and not saved. It belongs
@@ -111,12 +111,15 @@ impl Store {
 
     /// Make the temporary version the saved one in memory (after it was written to the file as
     /// the default of its slot).
+    ///
+    /// The saved timetable changed, so the revision moves and the Settings window redraws.
     pub fn commit_live(&mut self) {
         let index = self.live_base().map(|(index, _)| index);
         if let (Some(live), Some(index)) = (self.live.take(), index)
             && let Some(class) = self.config.schedule.class_mut(live.day, index)
         {
             *class = live.class;
+            self.revision += 1;
         }
     }
 
@@ -160,6 +163,30 @@ impl Store {
         Ok(before.is_some() && after.is_some() && before.as_ref() != after)
     }
 
+    /// Change the lead-in, linger and the defaults of the classes. The values are validated, the
+    /// `[general]` section of the file is rewritten and the file is read again, because classes
+    /// without their own break or thresholds follow these defaults. Nothing changes when they
+    /// are invalid or the file cannot be written.
+    pub fn set_general(&mut self, general: General) -> Result<(), ConfigError> {
+        general.validate().map_err(ConfigError::Invalid)?;
+        let file = self.file.as_mut().ok_or(ConfigError::NoFile)?;
+        file.save_general(&general)?;
+        self.config = file.reload()?.config;
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Change the colours of the bar. Nothing changes when the file cannot be written.
+    pub fn set_colors(&mut self, colors: Colors) -> Result<(), ConfigError> {
+        self.file
+            .as_mut()
+            .ok_or(ConfigError::NoFile)?
+            .save_colors(&colors)?;
+        self.config.colors = colors;
+        self.revision += 1;
+        Ok(())
+    }
+
     /// Store the break and thresholds of a class as its defaults in the file.
     pub fn save_class(&mut self, day: Weekday, class: &Class) -> Result<(), ConfigError> {
         self.file
@@ -191,6 +218,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Rgba;
     use crate::schedule::{Break, DEFAULT_BREAK_LEN, MINUTE, hm};
     use std::fs;
     use std::path::PathBuf;
@@ -316,13 +344,13 @@ mod tests {
         // Someone edits another part of the file behind our back.
         fs::write(
             dir.file(),
-            format!("{SAMPLE}\n[colors]\ngreen = \"#010203\"\n"),
+            format!("{SAMPLE}\n[colors]\nlesson = \"#010203\"\n"),
         )
         .unwrap();
         store
             .set_day(Weekday::Mon, vec![class((9, 0), (9, 50))])
             .unwrap();
-        assert!(dir.text().contains("green = \"#010203\""));
+        assert!(dir.text().contains("lesson = \"#010203\""));
     }
 
     #[test]
@@ -407,6 +435,16 @@ mod tests {
     }
 
     #[test]
+    fn committing_moves_the_revision_so_the_settings_window_redraws() {
+        let (_dir, mut store, _) = with_live("live-commit-revision");
+        let before = store.revision();
+        store.commit_live();
+        assert_eq!(store.revision(), before + 1);
+        store.commit_live();
+        assert_eq!(store.revision(), before + 1, "nothing left to commit");
+    }
+
+    #[test]
     fn an_external_edit_drops_the_live_class() {
         let (dir, mut store, _) = with_live("live-external");
         fs::write(dir.file(), SAMPLE.replace("# my schedule", "# changed")).unwrap();
@@ -475,5 +513,219 @@ mod tests {
         assert_eq!(store.revision(), 0);
         assert!(store.schedule().classes(Weekday::Mon).is_empty());
         assert!(!store.poll());
+    }
+
+    // ---- general settings and colours ----
+
+    const GENERAL: &str = "# top\n[general]\nlead_in_minutes = 5   # before\nlinger_seconds = 10\n\n[colors]\ngreen = \"#2ecc71\" # nice\n\n[monday]\nclasses = [\n  { start = \"09:00\", end = \"10:40\" },\n  { start = \"11:00\", end = \"11:50\", warning = [7, 7], final = [3, 3] },\n]\n";
+
+    fn general(store: &Store) -> General {
+        store.config().general()
+    }
+
+    #[test]
+    fn set_general_rewrites_the_values_and_keeps_comments_and_the_rest() {
+        let dir = Scratch::new("general", GENERAL);
+        let mut store = dir.store();
+        let mut g = general(&store);
+        g.lead_in = 8 * MINUTE;
+        g.linger = 25;
+        g.default_break = 15 * MINUTE;
+        g.warnings = crate::schedule::Warnings::new(12 * MINUTE, 4 * MINUTE).unwrap();
+        store.set_general(g).unwrap();
+
+        let text = dir.text();
+        assert!(text.contains("lead_in_minutes = 8   # before"), "{text}");
+        assert!(text.contains("linger_seconds = 25"));
+        assert!(text.contains("default_break_minutes = 15"));
+        assert!(text.contains("warning_minutes = 12") && text.contains("final_minutes = 4"));
+        assert!(text.starts_with("# top\n"));
+        assert!(text.contains("green = \"#2ecc71\" # nice"));
+        assert!(
+            text.contains(
+                "{ start = \"11:00\", end = \"11:50\", warning = [7, 7], final = [3, 3] }"
+            )
+        );
+        assert_eq!(general(&store), g);
+        assert_eq!(store.revision(), 1);
+        assert!(!store.poll(), "our own write is not an external edit");
+    }
+
+    #[test]
+    fn classes_that_follow_the_defaults_follow_the_new_ones() {
+        let dir = Scratch::new("follow", GENERAL);
+        let mut store = dir.store();
+        let mut g = general(&store);
+        g.default_break = 20 * MINUTE;
+        g.warnings = crate::schedule::Warnings::new(15 * MINUTE, 6 * MINUTE).unwrap();
+        store.set_general(g).unwrap();
+
+        let classes = store.schedule().classes(Weekday::Mon);
+        assert_eq!(
+            classes[0].brk.unwrap().len,
+            20 * MINUTE,
+            "no own break: the default"
+        );
+        assert_eq!(classes[0].warnings[0].warning, 15 * MINUTE);
+        assert_eq!(
+            classes[1].warnings[0].warning,
+            7 * MINUTE,
+            "its own thresholds stay"
+        );
+        assert_eq!(store.schedule().lead_in, g.lead_in);
+    }
+
+    #[test]
+    fn invalid_general_values_are_refused_and_nothing_is_written() {
+        let dir = Scratch::new("general-invalid", GENERAL);
+        let mut store = dir.store();
+        let before = dir.text();
+        let good = general(&store);
+        let bad = [
+            General {
+                lead_in: 61 * MINUTE,
+                ..good
+            },
+            General {
+                linger: 301,
+                ..good
+            },
+            General {
+                default_break: 0,
+                ..good
+            },
+            General {
+                default_break: 31 * MINUTE,
+                ..good
+            },
+            General {
+                warnings: crate::schedule::Warnings {
+                    warning: 3 * MINUTE,
+                    final_: 5 * MINUTE,
+                },
+                ..good
+            },
+            General {
+                warnings: crate::schedule::Warnings {
+                    warning: 61 * MINUTE,
+                    final_: 1,
+                },
+                ..good
+            },
+        ];
+        for g in bad {
+            assert!(
+                matches!(store.set_general(g), Err(ConfigError::Invalid(_))),
+                "{g:?}"
+            );
+        }
+        assert_eq!(dir.text(), before);
+        assert_eq!(general(&store), good);
+        assert_eq!(store.revision(), 0);
+    }
+
+    #[test]
+    fn general_without_a_section_adds_it_and_without_a_file_is_refused() {
+        let dir = Scratch::new("general-new", SAMPLE);
+        let mut store = dir.store();
+        let mut g = general(&store);
+        g.lead_in = 2 * MINUTE;
+        store.set_general(g).unwrap();
+        let text = dir.text();
+        assert!(
+            text.contains("[general]") && text.contains("lead_in_minutes = 2"),
+            "{text}"
+        );
+        assert!(text.contains("# my schedule") && text.contains("# keep me"));
+
+        let mut none = Store::new(Config::default(), None);
+        assert!(matches!(none.set_general(g), Err(ConfigError::NoFile)));
+        assert!(matches!(
+            none.set_colors(Colors::default()),
+            Err(ConfigError::NoFile)
+        ));
+    }
+
+    const OLD_KEYS: &str = "[general]\norange_minutes = 8   # warm\nred_minutes = 2\n\n[colors]\ngreen = \"#2ecc71\" # nice\norange = \"#f39c12\"\nred = \"#e74c3c\"\n\n[monday]\nclasses = [\n  { start = \"09:00\", end = \"09:50\", orange = 7, red = 3 },\n]\n";
+
+    #[test]
+    fn writing_the_general_values_into_an_old_file_uses_the_new_keys() {
+        let dir = Scratch::new("old-general", OLD_KEYS);
+        let mut store = dir.store();
+        let mut g = general(&store);
+        g.warnings = crate::schedule::Warnings::new(12 * MINUTE, 4 * MINUTE).unwrap();
+        store.set_general(g).unwrap();
+        let text = dir.text();
+        assert!(text.contains("warning_minutes = 12   # warm"), "{text}");
+        assert!(text.contains("final_minutes = 4"), "{text}");
+        assert!(
+            !text.contains("orange_minutes") && !text.contains("red_minutes"),
+            "{text}"
+        );
+        assert_eq!(general(&dir.store()), g);
+    }
+
+    #[test]
+    fn writing_the_colours_into_an_old_file_uses_the_new_keys() {
+        let dir = Scratch::new("old-colors", OLD_KEYS);
+        let mut store = dir.store();
+        let mut c = store.config().colors;
+        c.warning = Rgba::rgb(1, 2, 3);
+        store.set_colors(c).unwrap();
+        let text = dir.text();
+        for key in ["lesson", "warning", "final"] {
+            assert!(text.contains(&format!("{key} = \"#")), "{key} in {text}");
+        }
+        assert!(text.contains("lesson = \"#2ecc71\" # nice"), "{text}");
+        let colors = text.split("[monday]").next().unwrap();
+        for old in ["green", "orange =", "red ="] {
+            assert!(!colors.contains(old), "{old} in {text}");
+        }
+        assert_eq!(dir.store().config().colors, c);
+    }
+
+    #[test]
+    fn editing_a_day_of_an_old_file_writes_the_new_class_keys() {
+        let dir = Scratch::new("old-day", OLD_KEYS);
+        let mut store = dir.store();
+        let mut c = store.schedule().classes(Weekday::Mon)[0].clone();
+        c.warnings[0] = crate::schedule::Warnings::new(6 * MINUTE, MINUTE).unwrap();
+        store.set_day(Weekday::Mon, vec![c.clone()]).unwrap();
+        let text = dir.text();
+        assert!(
+            text.contains("warning = [6, 7]") && text.contains("final = [1, 3]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("orange = 7") && !text.contains("red = 3"),
+            "{text}"
+        );
+        assert_eq!(dir.store().schedule().classes(Weekday::Mon)[0], c);
+    }
+
+    #[test]
+    fn set_colors_writes_all_six_and_keeps_comments() {
+        let dir = Scratch::new("colors", GENERAL);
+        let mut store = dir.store();
+        let mut c = store.config().colors;
+        c.lesson = Rgba::rgb(1, 2, 3);
+        c.track.a = 0x40;
+        store.set_colors(c).unwrap();
+
+        let text = dir.text();
+        assert!(text.contains("lesson = \"#010203\" # nice"), "{text}");
+        assert!(text.contains("track = \"#33333340\""));
+        for key in ["warning", "final", "break", "text"] {
+            assert!(text.contains(&format!("{key} = \"#")), "{key} in {text}");
+        }
+        assert_eq!(store.config().colors, c);
+        assert_eq!(store.revision(), 1);
+        // And what was written reads back the same.
+        let mut again = dir.store();
+        assert_eq!(again.config().colors, c);
+        assert!(!again.poll());
+
+        store.set_colors(Colors::default()).unwrap();
+        assert_eq!(dir.store().config().colors, Colors::default());
     }
 }

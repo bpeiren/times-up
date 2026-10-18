@@ -12,8 +12,8 @@ use std::time::SystemTime;
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value, value};
 
 use crate::schedule::{
-    Break, Class, DEFAULT_BREAK_LEN, DEFAULT_LEAD_IN, DEFAULT_LINGER, DEFAULT_ORANGE, DEFAULT_RED,
-    MINUTE, Schedule, Secs, Warnings, Weekday,
+    Break, Class, DEFAULT_BREAK_LEN, DEFAULT_FINAL, DEFAULT_LEAD_IN, DEFAULT_LINGER,
+    DEFAULT_WARNING, MINUTE, Schedule, Secs, Warnings, Weekday,
 };
 
 pub const FILE_NAME: &str = "times-up.toml";
@@ -58,13 +58,22 @@ impl Rgba {
             a: if hex.len() == 8 { byte(6)? } else { 255 },
         })
     }
+
+    /// `#rrggbb`, or `#rrggbbaa` when not fully opaque; what [`Rgba::parse`] reads back.
+    pub fn to_hex(self) -> String {
+        if self.a == 255 {
+            format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+        } else {
+            format!("#{:02x}{:02x}{:02x}{:02x}", self.r, self.g, self.b, self.a)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Colors {
-    pub green: Rgba,
-    pub orange: Rgba,
-    pub red: Rgba,
+    pub lesson: Rgba,
+    pub warning: Rgba,
+    pub final_: Rgba,
     pub break_gap: Rgba,
     pub track: Rgba,
     pub text: Rgba,
@@ -73,9 +82,9 @@ pub struct Colors {
 impl Default for Colors {
     fn default() -> Self {
         Self {
-            green: Rgba::rgb(0x2e, 0xcc, 0x71),
-            orange: Rgba::rgb(0xf3, 0x9c, 0x12),
-            red: Rgba::rgb(0xe7, 0x4c, 0x3c),
+            lesson: Rgba::rgb(0x2e, 0xcc, 0x71),
+            warning: Rgba::rgb(0xf3, 0x9c, 0x12),
+            final_: Rgba::rgb(0xe7, 0x4c, 0x3c),
             break_gap: Rgba::rgb(0xbd, 0xc3, 0xc7),
             track: Rgba {
                 r: 0x33,
@@ -119,6 +128,59 @@ impl Default for Config {
             settings_window: WindowRect::default(),
             default_break: DEFAULT_BREAK_LEN,
             warnings: Warnings::default(),
+        }
+    }
+}
+
+/// The `[general]` times: when the bar appears and goes, and the defaults classes follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct General {
+    /// The bar appears this long before a class starts.
+    pub lead_in: Secs,
+    /// ...and stays this long after the last class ends.
+    pub linger: Secs,
+    /// Length of the break that classes of 100 minutes or more get by default.
+    pub default_break: Secs,
+    /// Warning thresholds used by classes that do not set their own.
+    pub warnings: Warnings,
+}
+
+impl General {
+    pub const MAX_LEAD_IN: Secs = 60 * MINUTE;
+    pub const MAX_LINGER: Secs = 300;
+    pub const MIN_BREAK: Secs = MINUTE;
+    pub const MAX_BREAK: Secs = 30 * MINUTE;
+    pub const MAX_WARNING: Secs = 60 * MINUTE;
+
+    /// Why these values cannot be used, if they cannot. What the Settings window offers always
+    /// passes; the file itself is read more leniently.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.lead_in > Self::MAX_LEAD_IN {
+            return Err("The lead-in can be at most 60 minutes".to_string());
+        }
+        if self.linger > Self::MAX_LINGER {
+            return Err("The bar can stay at most 300 seconds".to_string());
+        }
+        if !(Self::MIN_BREAK..=Self::MAX_BREAK).contains(&self.default_break) {
+            return Err("The default break must be 1 to 30 minutes".to_string());
+        }
+        let Warnings { warning, final_ } = self.warnings;
+        if warning > Self::MAX_WARNING || final_ > Self::MAX_WARNING {
+            return Err("The warning and final times can be at most 60 minutes".to_string());
+        }
+        Warnings::new(warning, final_)
+            .map_err(|_| "Final minutes must not be longer than warning".to_string())?;
+        Ok(())
+    }
+}
+
+impl Config {
+    pub fn general(&self) -> General {
+        General {
+            lead_in: self.schedule.lead_in,
+            linger: self.schedule.linger,
+            default_break: self.default_break,
+            warnings: self.warnings,
         }
     }
 }
@@ -187,21 +249,23 @@ pub fn parse(text: &str) -> Loaded {
             MINUTE,
             config.default_break,
         );
-        let orange = p.secs(t, "general", "orange_minutes", MINUTE, DEFAULT_ORANGE);
-        let red = p.secs(t, "general", "red_minutes", MINUTE, DEFAULT_RED);
-        match Warnings::new(orange, red) {
+        let warning_key = key_of(t, "warning_minutes", "orange_minutes");
+        let final_key = key_of(t, "final_minutes", "red_minutes");
+        let warning = p.secs(t, "general", warning_key, MINUTE, DEFAULT_WARNING);
+        let final_ = p.secs(t, "general", final_key, MINUTE, DEFAULT_FINAL);
+        match Warnings::new(warning, final_) {
             Ok(w) => config.warnings = w,
             Err(e) => p.add(format!(
-                "[general] orange_minutes/red_minutes: {e}; using defaults"
+                "[general] {warning_key}/{final_key}: {e}; using defaults"
             )),
         }
     }
 
     if let Some(t) = p.section(&doc, "colors") {
         let c = &mut config.colors;
-        c.green = p.color(t, "green", c.green);
-        c.orange = p.color(t, "orange", c.orange);
-        c.red = p.color(t, "red", c.red);
+        c.lesson = p.color(t, key_of(t, "lesson", "green"), c.lesson);
+        c.warning = p.color(t, key_of(t, "warning", "orange"), c.warning);
+        c.final_ = p.color(t, key_of(t, "final", "red"), c.final_);
         c.break_gap = p.color(t, "break", c.break_gap);
         c.track = p.color(t, "track", c.track);
         c.text = p.color(t, "text", c.text);
@@ -361,21 +425,22 @@ impl Problems {
         }
 
         // Thresholds: one number for every block, or one per block ([block 1, block 2]).
-        let orange = t.get("orange").and_then(|i| per_block(i, MINUTE));
-        let red = t.get("red").and_then(|i| per_block(i, MINUTE));
-        if t.get("orange").is_some() && orange.is_none() || t.get("red").is_some() && red.is_none()
-        {
-            self.add(format!("{at}: orange/red must be a number or a list of numbers of at least 0; using the defaults"));
+        let warning_item = t.get(key_of(t, "warning", "orange"));
+        let final_item = t.get(key_of(t, "final", "red"));
+        let warning = warning_item.and_then(|i| per_block(i, MINUTE));
+        let final_ = final_item.and_then(|i| per_block(i, MINUTE));
+        if warning_item.is_some() && warning.is_none() || final_item.is_some() && final_.is_none() {
+            self.add(format!("{at}: warning/final must be a number or a list of numbers of at least 0; using the defaults"));
         }
         for b in 0..2 {
             let w = Warnings {
-                orange: orange.map_or(class.warnings[b].orange, |o| o[b]),
-                red: red.map_or(class.warnings[b].red, |r| r[b]),
+                warning: warning.map_or(class.warnings[b].warning, |o| o[b]),
+                final_: final_.map_or(class.warnings[b].final_, |r| r[b]),
             };
-            match Warnings::new(w.orange, w.red) {
+            match Warnings::new(w.warning, w.final_) {
                 Ok(w) => class.warnings[b] = w,
                 Err(e) => self.add(format!(
-                    "{at}: orange/red (block {}): {e}; using the defaults",
+                    "{at}: warning/final (block {}): {e}; using the defaults",
                     b + 1
                 )),
             }
@@ -500,9 +565,96 @@ fn set_class(doc: &mut DocumentMut, day: Weekday, class: &Class) -> Result<(), C
     }
     entry.insert("break_len", Item::Value(minutes_value(brk_len)));
     let [w1, w2] = class.warnings;
-    entry.insert("orange", Item::Value(pair_value(w1.orange, w2.orange)));
-    entry.insert("red", Item::Value(pair_value(w1.red, w2.red)));
+    // A file from before the zones were renamed: its old keys give way to the new ones.
+    entry.remove("orange");
+    entry.remove("red");
+    entry.insert("warning", Item::Value(pair_value(w1.warning, w2.warning)));
+    entry.insert("final", Item::Value(pair_value(w1.final_, w2.final_)));
     Ok(())
+}
+
+/// Replace the value of `key`, keeping the comment on its line; add it when it is missing.
+fn set_value(t: &mut dyn TableLike, key: &str, new: Value) {
+    if let Some(Item::Value(old)) = t.get_mut(key) {
+        let mut new = new;
+        *new.decor_mut() = old.decor().clone();
+        *old = new;
+    } else {
+        t.insert(key, Item::Value(new));
+    }
+}
+
+/// The key a setting is read from: `key`, or `old_key` in a file from before it was renamed.
+/// When both are there the new one wins.
+fn key_of<'a>(t: &dyn TableLike, key: &'a str, old_key: &'a str) -> &'a str {
+    if t.get(key).is_none() && t.get(old_key).is_some() {
+        old_key
+    } else {
+        key
+    }
+}
+
+/// Like [`set_value`] under the new name `key`; the old name `old_key` (empty: none) is removed
+/// and its value's comment moves to the new key.
+fn set_value_renamed(t: &mut dyn TableLike, key: &str, old_key: &str, new: Value) {
+    let old = if old_key.is_empty() {
+        None
+    } else {
+        t.remove(old_key)
+    };
+    let mut new = new;
+    if t.get(key).is_none()
+        && let Some(Item::Value(old)) = old
+    {
+        *new.decor_mut() = old.decor().clone();
+    }
+    set_value(t, key, new);
+}
+
+/// The table `name`, made when it is missing (or not a table).
+fn section_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut dyn TableLike {
+    let item = doc.entry(name).or_insert_with(|| Item::Table(Table::new()));
+    if item.as_table_like().is_none() {
+        *item = Item::Table(Table::new());
+    }
+    item.as_table_like_mut().expect("a table was just made")
+}
+
+fn set_general(doc: &mut DocumentMut, general: &General) {
+    let t = section_mut(doc, "general");
+    set_value(t, "lead_in_minutes", minutes_value(general.lead_in));
+    set_value(t, "linger_seconds", Value::from(i64::from(general.linger)));
+    set_value(
+        t,
+        "default_break_minutes",
+        minutes_value(general.default_break),
+    );
+    set_value_renamed(
+        t,
+        "warning_minutes",
+        "orange_minutes",
+        minutes_value(general.warnings.warning),
+    );
+    set_value_renamed(
+        t,
+        "final_minutes",
+        "red_minutes",
+        minutes_value(general.warnings.final_),
+    );
+}
+
+fn set_colors(doc: &mut DocumentMut, colors: &Colors) {
+    let t = section_mut(doc, "colors");
+    for (key, old_key, color) in [
+        ("lesson", "green", colors.lesson),
+        ("warning", "orange", colors.warning),
+        ("final", "red", colors.final_),
+        ("break", "", colors.break_gap),
+        ("track", "", colors.track),
+        ("text", "", colors.text),
+    ] {
+        set_value_renamed(t, key, old_key, Value::from(color.to_hex()));
+    }
 }
 
 /// `32400` -> `"09:00"`; the end of the day is `"24:00"`.
@@ -527,8 +679,8 @@ fn class_value(class: &Class, default_break: Secs, defaults: Warnings) -> Value 
     }
     let [w1, w2] = class.warnings;
     if w1 != defaults || w2 != defaults {
-        t.insert("orange", pair_value(w1.orange, w2.orange));
-        t.insert("red", pair_value(w1.red, w2.red));
+        t.insert("warning", pair_value(w1.warning, w2.warning));
+        t.insert("final", pair_value(w1.final_, w2.final_));
     }
     Value::InlineTable(t)
 }
@@ -647,6 +799,30 @@ impl ConfigFile {
             set_window(doc, "settings_window", rect);
             Ok(())
         })
+    }
+
+    /// Write the `[general]` times, keeping the comments and everything else in the file.
+    pub fn save_general(&mut self, general: &General) -> Result<(), ConfigError> {
+        general.validate().map_err(ConfigError::Invalid)?;
+        self.edit(|doc| {
+            set_general(doc, general);
+            Ok(())
+        })
+    }
+
+    /// Write all six `[colors]`, keeping the comments and everything else in the file.
+    pub fn save_colors(&mut self, colors: &Colors) -> Result<(), ConfigError> {
+        self.edit(|doc| {
+            set_colors(doc, colors);
+            Ok(())
+        })
+    }
+
+    /// Read the file as it is now; it counts as seen, so [`ConfigFile::poll`] stays quiet.
+    pub fn reload(&mut self) -> Result<Loaded, ConfigError> {
+        let text = fs::read_to_string(&self.path).map_err(|e| ConfigError::Io(e.to_string()))?;
+        self.stamp = self.stat();
+        Ok(parse(&text))
     }
 
     /// Store the break and warning thresholds of `class` as its defaults (the file entry with the
@@ -782,7 +958,7 @@ mod tests {
             c.schedule.state(Weekday::Mon, hm(9, 0)),
             State::Running {
                 class: 0,
-                zone: Zone::Green,
+                zone: Zone::Lesson,
                 ..
             }
         ));
@@ -806,7 +982,7 @@ orange_minutes = 8
 red_minutes = 2.5
 
 [colors]
-green = "#00ff00"
+lesson = "#00ff00"
 break = "#112233cc"
 
 [window]
@@ -824,11 +1000,11 @@ height = 72
         assert_eq!(
             c.warnings,
             Warnings {
-                orange: mins(8),
-                red: 150
+                warning: mins(8),
+                final_: 150
             }
         );
-        assert_eq!(c.colors.green, Rgba::rgb(0, 255, 0));
+        assert_eq!(c.colors.lesson, Rgba::rgb(0, 255, 0));
         assert_eq!(
             c.colors.break_gap,
             Rgba {
@@ -838,7 +1014,7 @@ height = 72
                 a: 0xcc
             }
         );
-        assert_eq!(c.colors.red, Colors::default().red);
+        assert_eq!(c.colors.final_, Colors::default().final_);
         assert_eq!(
             c.window,
             WindowRect {
@@ -885,10 +1061,10 @@ height = 72
             r#"
 [monday]
 classes = [
-  { start = "09:00", end = "10:40", break_start = 40, break_len = 20, orange = [10, 6], red = [5, 3] },
+  { start = "09:00", end = "10:40", break_start = 40, break_len = 20, warning = [10, 6], final = [5, 3] },
   { start = "11:00", end = "12:40", break_len = 0 },
-  { start = "13:00", end = "14:40", orange = 12 },
-  { start = "15:00", end = "15:50", red = [4] },
+  { start = "13:00", end = "14:40", warning = 12 },
+  { start = "15:00", end = "15:50", final = [4] },
 ]
 "#,
         );
@@ -904,15 +1080,15 @@ classes = [
         assert_eq!(
             classes[0].warnings[0],
             Warnings {
-                orange: mins(10),
-                red: mins(5)
+                warning: mins(10),
+                final_: mins(5)
             }
         );
         assert_eq!(
             classes[0].warnings[1],
             Warnings {
-                orange: mins(6),
-                red: mins(3)
+                warning: mins(6),
+                final_: mins(3)
             }
         );
         assert_eq!(
@@ -929,15 +1105,15 @@ classes = [
         assert_eq!(
             classes[2].warnings,
             [Warnings {
-                orange: mins(12),
-                red: mins(5)
+                warning: mins(12),
+                final_: mins(5)
             }; 2]
         );
         assert_eq!(
             classes[3].warnings,
             [Warnings {
-                orange: mins(10),
-                red: mins(4)
+                warning: mins(10),
+                final_: mins(4)
             }; 2]
         );
     }
@@ -976,8 +1152,8 @@ classes = [{ start = "09:00", end = "09:50" }]
         assert_eq!(
             class.warnings,
             [Warnings {
-                orange: mins(7),
-                red: mins(3)
+                warning: mins(7),
+                final_: mins(3)
             }; 2]
         );
     }
@@ -1007,8 +1183,8 @@ orange_minutes = 3
 red_minutes = 9
 
 [colors]
-green = "lime"
-red = 5
+lesson = "lime"
+final = 5
 
 [window]
 x = "left"
@@ -1020,8 +1196,8 @@ width = -5
             "lead_in_minutes",
             "linger_seconds",
             "orange_minutes/red_minutes",
-            "[colors] green",
-            "[colors] red",
+            "[colors] lesson",
+            "[colors] final",
             "[window] x",
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
@@ -1045,8 +1221,8 @@ classes = [
   { start = "11:00" },
   { start = "12:00", end = "11:00" },
   { start = "13:00", end = "14:40", break_start = 99, break_len = 10 },
-  { start = "15:00", end = "15:50", orange = "lots" },
-  { start = "16:00", end = "16:50", orange = 1, red = 2 },
+  { start = "15:00", end = "15:50", warning = "lots" },
+  { start = "16:00", end = "16:50", warning = 1, final = 2 },
 ]
 "#,
         );
@@ -1059,7 +1235,7 @@ classes = [
         assert!(text.contains("class 4"), "{text}");
         assert!(text.contains("class 5") && text.contains("break"), "{text}");
         assert!(
-            text.contains("class 6") && text.contains("orange/red"),
+            text.contains("class 6") && text.contains("warning/final"),
             "{text}"
         );
         assert!(text.contains("class 7"), "{text}");
@@ -1309,8 +1485,8 @@ width = -5
             len: mins(15),
         });
         class.warnings[1] = Warnings {
-            orange: mins(7),
-            red: mins(2),
+            warning: mins(7),
+            final_: mins(2),
         };
         file.save_class(Weekday::Mon, &class).unwrap();
         assert!(file.poll().is_none());
@@ -1334,6 +1510,76 @@ width = -5
         let again = parse(&text);
         assert_eq!(again.problems, Vec::<String>::new());
         assert_eq!(again.config.schedule.classes(Weekday::Mon)[2].brk, None);
+    }
+
+    // ---- files from before the zones were renamed ----
+
+    const OLD_KEYS: &str = r##"[general]
+orange_minutes = 8
+red_minutes = 2
+
+[colors]
+green = "#010203"
+orange = "#040506"
+red = "#070809"
+
+[monday]
+classes = [
+  { start = "09:00", end = "09:50", orange = 7, red = 3 },
+]
+"##;
+
+    #[test]
+    fn the_old_keys_are_still_read() {
+        let loaded = parse(OLD_KEYS);
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let c = loaded.config;
+        assert_eq!(c.colors.lesson, Rgba::rgb(1, 2, 3));
+        assert_eq!(c.colors.warning, Rgba::rgb(4, 5, 6));
+        assert_eq!(c.colors.final_, Rgba::rgb(7, 8, 9));
+        assert_eq!((c.warnings.warning, c.warnings.final_), (mins(8), mins(2)));
+        let w = c.schedule.classes(Weekday::Mon)[0].warnings[0];
+        assert_eq!((w.warning, w.final_), (mins(7), mins(3)));
+    }
+
+    #[test]
+    fn a_new_key_wins_over_the_old_one() {
+        let loaded = parse(
+            "[general]\norange_minutes = 8\nwarning_minutes = 9\n\n[colors]\ngreen = \"#010203\"\nlesson = \"#0a0b0c\"\n\n[monday]\nclasses = [{ start = \"09:00\", end = \"09:50\", orange = 7, warning = 6 }]\n",
+        );
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.config.warnings.warning, mins(9));
+        assert_eq!(loaded.config.colors.lesson, Rgba::rgb(0x0a, 0x0b, 0x0c));
+        let w = loaded.config.schedule.classes(Weekday::Mon)[0].warnings[0];
+        assert_eq!(w.warning, mins(6));
+    }
+
+    #[test]
+    fn saving_a_class_into_an_old_file_writes_the_new_keys() {
+        let dir = TempDir::new("old-class");
+        fs::write(dir.file(), OLD_KEYS).unwrap();
+        let mut file = ConfigFile::new(dir.file());
+        let c = file.load_or_create().config;
+        let mut class = c.schedule.classes(Weekday::Mon)[0].clone();
+        class.warnings[0] = Warnings {
+            warning: mins(6),
+            final_: mins(1),
+        };
+        file.save_class(Weekday::Mon, &class).unwrap();
+
+        let text = fs::read_to_string(dir.file()).unwrap();
+        assert!(
+            text.contains("warning = [6, 7]") && text.contains("final = [1, 3]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("orange = 7") && !text.contains("red = 3"),
+            "{text}"
+        );
+        // What the app did not write stays as it was.
+        assert!(text.contains("green = \"#010203\""));
+        assert!(text.contains("orange_minutes = 8"));
+        assert_eq!(parse(&text).config.schedule.classes(Weekday::Mon)[0], class);
     }
 
     #[test]
