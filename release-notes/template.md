@@ -1,7 +1,7 @@
 ## Time's up {{VERSION}}
 
-A small always-on-top class-hour timer for Windows. A bar on screen fills green, then orange, then
-red as the class hour runs out.
+A small always-on-top class-hour timer for Windows. A bar on screen fills with the lesson colour, then
+the warning colour, then the final colour as the class hour runs out.
 
 ### Download
 
