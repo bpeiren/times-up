@@ -78,17 +78,18 @@ Test-Case 'the changes body drops the release heading' {
 }
 
 Test-Case 'the release notes fill every placeholder' {
-    $template = "# {{VERSION}}`n{{ZIP}}`n{{CHANGES}}`n{{SHA256}}`r`n"
-    $notes = New-ReleaseNotes $template '0.0.2' 'z.zip' 'ABCDEF' '- change'
-    Assert-Equal "# 0.0.2`nz.zip`n- change`nabcdef`n" $notes
-    Assert-Throws { New-ReleaseNotes 'no placeholders' '1.0.0' 'z' 'h' 'c' } '*no {{VERSION}}*'
-    Assert-Throws { New-ReleaseNotes "{{VERSION}}{{ZIP}}{{SHA256}}{{CHANGES}}{{OTHER}}" '1.0.0' 'z' 'h' 'c' } '*Unfilled*'
+    $template = "# {{VERSION}}`n{{ZIP}}`n{{CHANGES}}`r`n"
+    $notes = New-ReleaseNotes $template '0.0.2' 'z.zip' '- change'
+    Assert-Equal "# 0.0.2`nz.zip`n- change`n" $notes
+    Assert-Throws { New-ReleaseNotes 'no placeholders' '1.0.0' 'z' 'c' } '*no {{VERSION}}*'
+    Assert-Throws { New-ReleaseNotes "{{VERSION}}{{ZIP}}{{CHANGES}}{{OTHER}}" '1.0.0' 'z' 'c' } '*Unfilled*'
 }
 
 Test-Case 'the real template has all its placeholders' {
     $template = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\release-notes\template.md'))
-    $notes = New-ReleaseNotes $template '9.9.9' 'times-up-9.9.9-win-x64.zip' ('a' * 64) '### Features'
-    if (-not $notes.Contains('times-up-9.9.9-win-x64.zip') -or -not $notes.Contains('a' * 64)) { throw 'missing zip or checksum' }
+    $notes = New-ReleaseNotes $template '9.9.9' 'times-up-9.9.9-win-x64.zip' '### Features'
+    if (-not $notes.Contains('times-up-9.9.9-win-x64.zip')) { throw 'missing zip' }
+    if ($notes -match 'SHA256') { throw 'the checksum is added by the release workflow, not by the template' }
 }
 
 $readme = @'
@@ -113,7 +114,8 @@ Test-Case 'the Measured table is refreshed and the rest stays' {
         -replace 'zip \(exe \+ sample config \+ readme\) \| 290,944', 'zip (exe + readme + license) | 270,000' `
         -replace '12\.4 MB, of which only 2\.1 MB', '12.0 MB, of which only 2.0 MB' `
         -replace '0\.52 %', '0.40 %'
-    Assert-Equal $expected $new
+    # The here-string has the line endings of this file (CRLF in a Windows checkout).
+    Assert-Equal $expected.Replace("`r`n", "`n") $new.Replace("`r`n", "`n")
 }
 
 Test-Case 'the Measured table refuses a README whose rows moved' {
@@ -129,7 +131,7 @@ Test-Case 'the real README has a Measured table the script can refresh' {
 
 Test-Case 'the release script is a dry run unless -Publish is given, and has -Unattended and -Help' {
     $params = (Get-Command (Join-Path $PSScriptRoot 'release.ps1')).Parameters.Keys
-    foreach ($p in 'Publish', 'Unattended', 'Help', 'Version', 'Draft', 'Prerelease') {
+    foreach ($p in 'Publish', 'Unattended', 'Help', 'Version') {
         if ($p -notin $params) { throw "release.ps1 has no -$p" }
     }
     if ('DryRun' -in $params) { throw 'release.ps1 must not have -DryRun: a dry run is the default' }

@@ -1,0 +1,71 @@
+# Checks every pull request and every push to main. Nothing is published from here.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'rust-toolchain*') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # The window and tray tests create real windows and notification icons. A hosted runner may
+      # not give them an interactive desktop; scripts/ci-tests.ps1 says so and skips exactly those
+      # tests when it cannot create a window, instead of letting them fail for the wrong reason.
+      - name: cargo test
+        shell: pwsh
+        run: ./scripts/ci-tests.ps1
+
+      # The release build is also what the release workflow packages, so a pull request that would
+      # break it (or make the exe need the C++ runtime) is caught before it is merged.
+      - name: Release build and exe dependency check
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          $env:TIMES_UP_EXE = (Resolve-Path target/release/times-up.exe)
+          cargo test --locked --test exe_dependencies
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Release scripts tests
+        shell: pwsh
+        run: ./scripts/release.tests.ps1

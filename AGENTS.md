@@ -77,13 +77,21 @@ file is not touched, so it cannot go stale, and pull requests do not conflict ov
 
 - See what is unreleased (printed, not written): `git cliff --unreleased`
 - Release: never by hand, run `.\scripts\release.ps1` (a dry run unless `-Publish` is given; `-Version X.Y.Z`
-  to choose the version, otherwise it is proposed from the commits; `-Draft`, `-Prerelease`). It checks,
-  builds, bumps the version, generates `CHANGELOG.md` and `release-notes/vX.Y.Z.md`, refreshes the
-  Measured table of the README, commits all that as one signed `chore(release): X.Y.Z`, tags it
-  and publishes the GitHub release, then verifies the download. A person reviews the generated
-  notes before anything is committed, unless `-Unattended` is given (for automation; do not use it
-  without being asked to). If it stops, its help (`Get-Help .\scripts\release.ps1`) says
-  what to do at each step. Never move a tag that was pushed.
+  to choose the version, otherwise it is proposed from the commits). It checks, builds, bumps the
+  version, generates `CHANGELOG.md` and `release-notes/vX.Y.Z.md`, refreshes the Measured table of
+  the README, commits all that as one signed `chore(release): X.Y.Z`, tags it (signed) and pushes the
+  tag. The tag starts the `Release` workflow (`.github/workflows/release.yml`), which builds,
+  checks and packages on a GitHub runner, appends the SHA256 of that zip to the notes and creates
+  the GitHub release; the script waits for it and verifies the download. A person reviews the
+  generated notes before anything is committed, unless `-Unattended` is given (for automation; do
+  not use it without being asked to). If it stops, its help (`Get-Help .\scripts\release.ps1`)
+  says what to do at each step. Never move a tag that was pushed.
+- CI: `.github/workflows/ci.yml` runs on every pull request and push to main (Windows runner):
+  `cargo fmt --check`, clippy `-D warnings`, `cargo test` (`scripts/ci-tests.ps1`: the `win::` window
+  and tray tests are skipped with a visible warning only if the runner has no interactive desktop),
+  the release build with the exe dependency check, and `scripts/release.tests.ps1`. Workflows use
+  `contents: read` (the release job alone has `contents: write`), pin actions to a full commit SHA,
+  and need only the built-in `GITHUB_TOKEN`. Never push commits or hold a signing key in a workflow.
 - `git cliff --latest --strip all` prints the notes of the newest tagged release.
 - Left out of the changelog: `chore`, `test` and `ci` commits, and `docs` or `build` commits scoped
   `groma`, `backlog` or `release`. Everything else is listed by type, so write subjects a user can

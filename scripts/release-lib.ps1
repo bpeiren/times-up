@@ -58,15 +58,16 @@ function Get-ChangesBody([string]$cliffOutput) {
     return (($kept -join "`n").Trim())
 }
 
-# The release notes: the hand-written template with the placeholders {{VERSION}}, {{ZIP}},
-# {{SHA256}} and {{CHANGES}} filled in.
-function New-ReleaseNotes([string]$template, [string]$version, [string]$zipName, [string]$sha256, [string]$changes) {
+# The release notes: the hand-written template with the placeholders {{VERSION}}, {{ZIP}} and
+# {{CHANGES}} filled in. There is no checksum in them: the release workflow builds the zip and
+# appends the "Checksum" section itself, so it always matches what is attached.
+function New-ReleaseNotes([string]$template, [string]$version, [string]$zipName, [string]$changes) {
     $text = $template.Replace("`r`n", "`n")
-    foreach ($key in '{{VERSION}}', '{{ZIP}}', '{{SHA256}}', '{{CHANGES}}') {
+    foreach ($key in '{{VERSION}}', '{{ZIP}}', '{{CHANGES}}') {
         if (-not $text.Contains($key)) { throw "The release notes template has no $key" }
     }
     $text = $text.Replace('{{VERSION}}', $version).Replace('{{ZIP}}', $zipName)
-    $text = $text.Replace('{{SHA256}}', $sha256.ToLower()).Replace('{{CHANGES}}', $changes)
+    $text = $text.Replace('{{CHANGES}}', $changes)
     if ($text -match '\{\{[A-Z0-9]+\}\}') { throw "Unfilled placeholder in the release notes: $($Matches[0])" }
     return $text.TrimEnd() + "`n"
 }
