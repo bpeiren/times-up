@@ -1,6 +1,6 @@
 [package]
 name = "times-up"
-version = "0.0.1"
+version = "0.0.2"
 license = "MIT"
 description = "A small always-on-top class-hour timer for Windows"
 edition = "2024"

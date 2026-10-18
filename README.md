@@ -101,10 +101,10 @@ On Windows 11, 2560x1080 at 100 % scaling, release build, a class in progress (`
 
 | | |
 |---|---|
-| `times-up.exe` | 549,376 bytes (about 0.5 MB) |
-| zip (exe + sample config + readme) | 290,944 bytes |
-| Memory, working set | 12.4 MB, of which only 2.1 MB is private; the rest is shared Windows DLL pages |
-| CPU, idle | 0.52 % of one core (one redraw per second) |
+| `times-up.exe` | 528,384 bytes (about 0.5 MB) |
+| zip (exe + readme + license) | 286,924 bytes |
+| Memory, working set | 13.0 MB, of which only 2.2 MB is private; the rest is shared Windows DLL pages |
+| CPU, idle | 0.42 % of one core (one redraw per second) |
 | Disk and registry | nothing outside its own folder, except the optional *Start with Windows* entry |
 
 ## For developers
