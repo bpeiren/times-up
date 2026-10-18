@@ -1,10 +1,10 @@
-//! Editing a class on the bar itself: the break and the warning and final zone boundaries can be
+//! Editing a class on the bar itself: the breaks and the warning and final zone boundaries can be
 //! dragged. Pure rules (no Win32): which handle is under the pointer, and what a drag does to the
 //! class, snapped to whole minutes and clamped so the result is always a sensible class.
 
 use crate::schedule::{Break, Class, MINUTE, Secs, Warnings, format_clock};
 
-/// A block between the start (or the break) and the end of the class needs at least this much.
+/// A block between the start, the breaks and the end of the class needs at least this much.
 pub const MIN_BLOCK: Secs = 5 * MINUTE;
 pub const MIN_BREAK: Secs = MINUTE;
 /// The final zone is at least this long, and warning starts at least this much before final.
@@ -20,12 +20,12 @@ pub enum ZoneEdge {
 /// Something on the bar that can be dragged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handle {
-    /// The start of the break: moves it, so the first block gets longer or shorter.
-    BreakStart,
-    /// The end of the break.
-    BreakEnd,
-    /// The break as a whole: it keeps its length.
-    BreakBody,
+    /// The start of break `n`: moves it, so the block before it gets longer or shorter.
+    BreakStart(usize),
+    /// The end of break `n`.
+    BreakEnd(usize),
+    /// Break `n` as a whole: it keeps its length.
+    BreakBody(usize),
     /// Where the warning or final zone of a block begins.
     Zone { block: usize, edge: ZoneEdge },
 }
@@ -57,8 +57,8 @@ pub struct HandleLabel {
     pub position: f32,
 }
 
-/// The label for `handle` of `class` as it is now; `None` for a break handle of a class without
-/// a break.
+/// The label for `handle` of `class` as it is now; `None` for a handle of a break the class
+/// does not have.
 pub fn describe(class: &Class, handle: Handle) -> Option<HandleLabel> {
     let total = class.duration().max(1) as f32;
     let at = |offset: Secs| format_clock(class.start + offset);
@@ -73,11 +73,11 @@ pub fn describe(class: &Class, handle: Handle) -> Option<HandleLabel> {
                 position: offset as f32 / total,
             })
         }
-        Handle::BreakStart | Handle::BreakEnd | Handle::BreakBody => {
-            let b = class.brk?;
+        Handle::BreakStart(n) | Handle::BreakEnd(n) | Handle::BreakBody(n) => {
+            let b = *class.breaks.get(n)?;
             let position = match handle {
-                Handle::BreakStart => b.start as f32,
-                Handle::BreakEnd => b.end() as f32,
+                Handle::BreakStart(_) => b.start as f32,
+                Handle::BreakEnd(_) => b.end() as f32,
                 _ => (b.start + b.end()) as f32 / 2.0,
             } / total;
             Some(HandleLabel {
@@ -90,16 +90,16 @@ pub fn describe(class: &Class, handle: Handle) -> Option<HandleLabel> {
 
 /// The handle under `x` (pixels from the left edge of a bar `width` pixels wide), if any.
 /// Boundaries within `grip` pixels count; the nearest one wins, with the break edges ahead of the
-/// zone boundaries when equally near. Failing that, the inside of the break is its body.
+/// zone boundaries when equally near. Failing that, the inside of a break is its body.
 pub fn handle_at(class: &Class, x: f32, width: f32, grip: f32) -> Option<Handle> {
     if width <= 0.0 || class.duration() == 0 {
         return None;
     }
     let px = |secs: Secs| secs as f32 / class.duration() as f32 * width;
-    let mut candidates: Vec<(f32, Handle)> = Vec::with_capacity(6);
-    if let Some(b) = class.brk {
-        candidates.push((px(b.start), Handle::BreakStart));
-        candidates.push((px(b.end()), Handle::BreakEnd));
+    let mut candidates: Vec<(f32, Handle)> = Vec::with_capacity(2 * class.block_count() * 2);
+    for (n, b) in class.breaks.iter().enumerate() {
+        candidates.push((px(b.start), Handle::BreakStart(n)));
+        candidates.push((px(b.end()), Handle::BreakEnd(n)));
     }
     for block in 0..class.block_count() {
         for edge in [ZoneEdge::Warning, ZoneEdge::Final] {
@@ -117,8 +117,11 @@ pub fn handle_at(class: &Class, x: f32, width: f32, grip: f32) -> Option<Handle>
     if let Some((_, handle)) = nearest {
         return Some(handle);
     }
-    let b = class.brk?;
-    (x > px(b.start) && x < px(b.end())).then_some(Handle::BreakBody)
+    class
+        .breaks
+        .iter()
+        .position(|b| x > px(b.start) && x < px(b.end()))
+        .map(Handle::BreakBody)
 }
 
 /// `class` after dragging `handle` by `delta` seconds (positive = later). Everything is snapped
@@ -129,34 +132,41 @@ pub fn drag(class: &Class, handle: Handle, delta: i64) -> Class {
     let mut out = class.clone();
 
     match handle {
-        Handle::BreakStart | Handle::BreakEnd | Handle::BreakBody => {
-            let Some(b) = class.brk else {
+        Handle::BreakStart(n) | Handle::BreakEnd(n) | Handle::BreakBody(n) => {
+            let Some(b) = class.breaks.get(n) else {
                 return out;
             };
             let (start, end) = (i64::from(b.start), i64::from(b.end()));
             let len = end - start;
+            // A break stays between its neighbours, each block keeping its minimum length.
+            let earliest = n
+                .checked_sub(1)
+                .map_or(0, |p| i64::from(class.breaks[p].end()))
+                + min_block;
+            let latest = class
+                .breaks
+                .get(n + 1)
+                .map_or(duration, |next| i64::from(next.start))
+                - min_block;
             let (new_start, new_end) = match handle {
-                Handle::BreakStart => {
-                    let s = snap(start + delta).clamp(min_block, (end - min_break).max(min_block));
+                Handle::BreakStart(_) => {
+                    let s = snap(start + delta).clamp(earliest, (end - min_break).max(earliest));
                     (s, end)
                 }
-                Handle::BreakEnd => {
-                    let e = snap(end + delta).clamp(
-                        start + min_break,
-                        (duration - min_block).max(start + min_break),
-                    );
+                Handle::BreakEnd(_) => {
+                    let e =
+                        snap(end + delta).clamp(start + min_break, latest.max(start + min_break));
                     (start, e)
                 }
                 _ => {
-                    let s = snap(start + delta)
-                        .clamp(min_block, (duration - min_block - len).max(min_block));
+                    let s = snap(start + delta).clamp(earliest, (latest - len).max(earliest));
                     (s, s + len)
                 }
             };
-            out.brk = Some(Break {
+            out.breaks[n] = Break {
                 start: new_start as Secs,
                 len: (new_end - new_start) as Secs,
-            });
+            };
         }
         Handle::Zone { block, edge } => {
             if block >= class.block_count() {
@@ -220,14 +230,18 @@ mod tests {
     #[test]
     fn break_edges_and_body_are_found() {
         let c = double();
-        assert_eq!(at(&c, 450.0), Some(Handle::BreakStart));
-        assert_eq!(at(&c, 453.0), Some(Handle::BreakStart), "within the grip");
-        assert_eq!(at(&c, 550.0), Some(Handle::BreakEnd));
-        assert_eq!(at(&c, 500.0), Some(Handle::BreakBody));
-        assert_eq!(at(&c, 460.0), Some(Handle::BreakBody));
+        assert_eq!(at(&c, 450.0), Some(Handle::BreakStart(0)));
+        assert_eq!(
+            at(&c, 453.0),
+            Some(Handle::BreakStart(0)),
+            "within the grip"
+        );
+        assert_eq!(at(&c, 550.0), Some(Handle::BreakEnd(0)));
+        assert_eq!(at(&c, 500.0), Some(Handle::BreakBody(0)));
+        assert_eq!(at(&c, 460.0), Some(Handle::BreakBody(0)));
         assert_eq!(
             at(&c, 545.0),
-            Some(Handle::BreakBody),
+            Some(Handle::BreakBody(0)),
             "beyond the end grip is body"
         );
     }
@@ -312,16 +326,16 @@ mod tests {
             final_: 0,
         };
         // red_at == break start (45 min).
-        assert_eq!(at(&c, 450.0), Some(Handle::BreakStart));
+        assert_eq!(at(&c, 450.0), Some(Handle::BreakStart(0)));
     }
 
     #[test]
     fn a_class_without_a_break_has_no_break_handles() {
-        let c = double().with_break(None).unwrap();
+        let c = double().with_breaks(Vec::new()).unwrap();
         for x in [450.0, 500.0, 550.0] {
             assert!(!matches!(
                 at(&c, x),
-                Some(Handle::BreakStart | Handle::BreakEnd | Handle::BreakBody)
+                Some(Handle::BreakStart(_) | Handle::BreakEnd(_) | Handle::BreakBody(_))
             ));
         }
     }
@@ -392,9 +406,9 @@ mod tests {
     fn the_break_is_described_by_its_start_and_end() {
         let c = double(); // break 09:45-09:55
         for (handle, position) in [
-            (Handle::BreakStart, 0.45),
-            (Handle::BreakEnd, 0.55),
-            (Handle::BreakBody, 0.50),
+            (Handle::BreakStart(0), 0.45),
+            (Handle::BreakEnd(0), 0.55),
+            (Handle::BreakBody(0), 0.50),
         ] {
             let label = describe(&c, handle).unwrap();
             assert_eq!(label.text, "09:45\u{2013}09:55", "{handle:?}");
@@ -404,9 +418,9 @@ mod tests {
                 label.position
             );
         }
-        let moved = drag(&c, Handle::BreakBody, mins(10));
+        let moved = drag(&c, Handle::BreakBody(0), mins(10));
         assert_eq!(
-            describe(&moved, Handle::BreakBody).unwrap().text,
+            describe(&moved, Handle::BreakBody(0)).unwrap().text,
             "09:55\u{2013}10:05"
         );
     }
@@ -414,8 +428,8 @@ mod tests {
     #[test]
     fn nothing_is_described_for_a_handle_the_class_does_not_have() {
         let c = single();
-        assert_eq!(describe(&c, Handle::BreakStart), None);
-        assert_eq!(describe(&c, Handle::BreakBody), None);
+        assert_eq!(describe(&c, Handle::BreakStart(0)), None);
+        assert_eq!(describe(&c, Handle::BreakBody(0)), None);
         assert_eq!(
             describe(
                 &c,
@@ -441,75 +455,79 @@ mod tests {
     // ---- dragging the break ----
 
     fn brk(c: &Class) -> (i64, i64) {
-        let b = c.brk.unwrap();
+        let b = c.breaks[0];
         (i64::from(b.start), i64::from(b.end()))
     }
 
     #[test]
     fn dragging_the_break_body_moves_it_and_keeps_its_length() {
-        let c = drag(&double(), Handle::BreakBody, mins(10));
+        let c = drag(&double(), Handle::BreakBody(0), mins(10));
         assert_eq!(brk(&c), (mins(55), mins(65)));
-        let c = drag(&double(), Handle::BreakBody, -mins(20));
+        let c = drag(&double(), Handle::BreakBody(0), -mins(20));
         assert_eq!(brk(&c), (mins(25), mins(35)));
     }
 
     #[test]
     fn dragging_the_break_start_changes_its_length() {
-        let c = drag(&double(), Handle::BreakStart, -mins(5));
+        let c = drag(&double(), Handle::BreakStart(0), -mins(5));
         assert_eq!(
             brk(&c),
             (mins(40), mins(55)),
             "starts earlier, ends where it did"
         );
-        let c = drag(&double(), Handle::BreakStart, mins(3));
+        let c = drag(&double(), Handle::BreakStart(0), mins(3));
         assert_eq!(brk(&c), (mins(48), mins(55)));
     }
 
     #[test]
     fn dragging_the_break_end_changes_its_length() {
-        let c = drag(&double(), Handle::BreakEnd, mins(7));
+        let c = drag(&double(), Handle::BreakEnd(0), mins(7));
         assert_eq!(brk(&c), (mins(45), mins(62)));
-        let c = drag(&double(), Handle::BreakEnd, -mins(4));
+        let c = drag(&double(), Handle::BreakEnd(0), -mins(4));
         assert_eq!(brk(&c), (mins(45), mins(51)));
     }
 
     #[test]
     fn break_drags_snap_to_whole_minutes() {
-        let c = drag(&double(), Handle::BreakBody, 94); // 1.57 minutes -> 2
+        let c = drag(&double(), Handle::BreakBody(0), 94); // 1.57 minutes -> 2
         assert_eq!(brk(&c), (mins(47), mins(57)));
-        let c = drag(&double(), Handle::BreakBody, 29); // under half a minute -> 0
+        let c = drag(&double(), Handle::BreakBody(0), 29); // under half a minute -> 0
         assert_eq!(brk(&c), (mins(45), mins(55)));
-        let c = drag(&double(), Handle::BreakBody, -31); // -0.52 -> -1
+        let c = drag(&double(), Handle::BreakBody(0), -31); // -0.52 -> -1
         assert_eq!(brk(&c), (mins(44), mins(54)));
     }
 
     #[test]
     fn blocks_keep_at_least_five_minutes() {
         // Far to the left: the first block stays 5 minutes; the break keeps its 10.
-        let c = drag(&double(), Handle::BreakBody, -mins(500));
+        let c = drag(&double(), Handle::BreakBody(0), -mins(500));
         assert_eq!(brk(&c), (mins(5), mins(15)));
         // Far to the right: the second block stays 5 minutes.
-        let c = drag(&double(), Handle::BreakBody, mins(500));
+        let c = drag(&double(), Handle::BreakBody(0), mins(500));
         assert_eq!(brk(&c), (mins(85), mins(95)));
         // Start edge dragged to the very start.
-        let c = drag(&double(), Handle::BreakStart, -mins(500));
+        let c = drag(&double(), Handle::BreakStart(0), -mins(500));
         assert_eq!(brk(&c), (mins(5), mins(55)));
         // End edge dragged to the very end.
-        let c = drag(&double(), Handle::BreakEnd, mins(500));
+        let c = drag(&double(), Handle::BreakEnd(0), mins(500));
         assert_eq!(brk(&c), (mins(45), mins(95)));
     }
 
     #[test]
     fn the_break_keeps_at_least_one_minute() {
-        let c = drag(&double(), Handle::BreakStart, mins(500));
+        let c = drag(&double(), Handle::BreakStart(0), mins(500));
         assert_eq!(brk(&c), (mins(54), mins(55)));
-        let c = drag(&double(), Handle::BreakEnd, -mins(500));
+        let c = drag(&double(), Handle::BreakEnd(0), -mins(500));
         assert_eq!(brk(&c), (mins(45), mins(46)));
     }
 
     #[test]
     fn a_dragged_break_always_gives_a_valid_class() {
-        for handle in [Handle::BreakStart, Handle::BreakEnd, Handle::BreakBody] {
+        for handle in [
+            Handle::BreakStart(0),
+            Handle::BreakEnd(0),
+            Handle::BreakBody(0),
+        ] {
             for delta in [
                 -mins(1000),
                 -mins(33),
@@ -535,7 +553,11 @@ mod tests {
     #[test]
     fn break_handles_do_nothing_without_a_break() {
         let c = single();
-        for handle in [Handle::BreakStart, Handle::BreakEnd, Handle::BreakBody] {
+        for handle in [
+            Handle::BreakStart(0),
+            Handle::BreakEnd(0),
+            Handle::BreakBody(0),
+        ] {
             assert_eq!(drag(&c, handle, mins(5)), c);
         }
     }
@@ -670,15 +692,15 @@ mod tests {
     #[test]
     fn dragging_a_zone_does_not_touch_the_break() {
         let c = drag(&double(), warning(0), mins(2));
-        assert_eq!(c.brk, double().brk);
-        let c = drag(&double(), Handle::BreakBody, mins(2));
+        assert_eq!(c.breaks, double().breaks);
+        let c = drag(&double(), Handle::BreakBody(0), mins(2));
         assert_eq!(c.warnings, double().warnings);
     }
 
     #[test]
     fn moving_the_break_changes_which_block_a_boundary_belongs_to() {
         // A 20 minute first block (break at 20..30) with final 5 and warning 10 before its end.
-        let c = drag(&double(), Handle::BreakBody, -mins(25));
+        let c = drag(&double(), Handle::BreakBody(0), -mins(25));
         assert_eq!(brk(&c), (mins(20), mins(30)));
         assert_eq!(c.block(0).len(), mins(20) as u32);
         // Its zones are still valid and inside the shorter block.
@@ -687,5 +709,97 @@ mod tests {
         // A zone drag on the shortened block uses the new length.
         let c = drag(&c, warning(0), -mins(500));
         assert_eq!(zones(&c, 0).0, mins(20));
+    }
+
+    // ---- several breaks ----
+
+    fn brk_at(start_min: i64, len_min: i64) -> Break {
+        Break {
+            start: (start_min * 60) as Secs,
+            len: (len_min * 60) as Secs,
+        }
+    }
+
+    /// 09:00-12:00 with breaks at 50..60 and 110..120.
+    fn lab() -> Class {
+        Class::new(hm(9, 0), hm(12, 0), DEFAULT_BREAK_LEN)
+            .unwrap()
+            .with_breaks(vec![brk_at(50, 10), brk_at(110, 10)])
+            .unwrap()
+    }
+
+    #[test]
+    fn every_break_has_its_own_handles() {
+        // A bar of 1800 px for 180 minutes: 10 px per minute.
+        let c = lab();
+        let find = |x: f32| handle_at(&c, x, 1800.0, 4.0);
+        assert_eq!(find(500.0), Some(Handle::BreakStart(0)));
+        assert_eq!(find(600.0), Some(Handle::BreakEnd(0)));
+        assert_eq!(find(1100.0), Some(Handle::BreakStart(1)));
+        assert_eq!(find(1150.0), Some(Handle::BreakBody(1)));
+        assert_eq!(find(550.0), Some(Handle::BreakBody(0)));
+    }
+
+    #[test]
+    fn describe_names_the_break_by_its_position() {
+        let c = lab();
+        let label = describe(&c, Handle::BreakBody(1)).unwrap();
+        assert_eq!(label.text, "10:50\u{2013}11:00");
+        assert!((label.position - 115.0 / 180.0).abs() < 1e-4);
+        assert_eq!(describe(&c, Handle::BreakStart(2)), None);
+    }
+
+    #[test]
+    fn a_break_stops_at_its_neighbours_and_never_crosses_them() {
+        let c = lab();
+        // Later: the block before the second break keeps its five minutes.
+        let moved = drag(&c, Handle::BreakBody(0), mins(200));
+        assert_eq!(moved.breaks, vec![brk_at(95, 10), brk_at(110, 10)]);
+        // Earlier: the block after the first break keeps its five minutes.
+        let moved = drag(&c, Handle::BreakBody(1), -mins(200));
+        assert_eq!(moved.breaks, vec![brk_at(50, 10), brk_at(65, 10)]);
+        // The edges meet the same limits.
+        let moved = drag(&c, Handle::BreakEnd(0), mins(100));
+        assert_eq!(moved.breaks, vec![brk_at(50, 55), brk_at(110, 10)]);
+        let moved = drag(&c, Handle::BreakStart(1), -mins(100));
+        assert_eq!(moved.breaks, vec![brk_at(50, 10), brk_at(65, 55)]);
+        // The last break stops five minutes from the end of the class.
+        let moved = drag(&c, Handle::BreakBody(1), mins(200));
+        assert_eq!(moved.breaks, vec![brk_at(50, 10), brk_at(165, 10)]);
+        // Dragging a break the class does not have changes nothing.
+        assert_eq!(drag(&c, Handle::BreakBody(2), mins(5)), c);
+    }
+
+    #[test]
+    fn dragging_a_break_keeps_the_thresholds_of_every_block() {
+        let custom = Warnings::new(mins(3) as Secs, mins(1) as Secs).unwrap();
+        let c = lab().with_warnings(1, custom).unwrap();
+        let moved = drag(&c, Handle::BreakBody(0), mins(5));
+        assert_eq!(moved.warnings, c.warnings);
+    }
+
+    #[test]
+    fn the_zones_of_every_block_are_found_and_dragged_on_their_own() {
+        let custom = Warnings::new(mins(20) as Secs, mins(8) as Secs).unwrap();
+        let c = lab().with_warnings(2, custom).unwrap();
+        // Block 3 is 120..180: its warning zone starts 20 minutes before the end, at 160.
+        assert_eq!(
+            handle_at(&c, 1600.0, 1800.0, 4.0),
+            Some(Handle::Zone {
+                block: 2,
+                edge: ZoneEdge::Warning
+            })
+        );
+        let moved = drag(
+            &c,
+            Handle::Zone {
+                block: 2,
+                edge: ZoneEdge::Warning,
+            },
+            mins(5),
+        );
+        assert_eq!(moved.warnings[2].warning, mins(15) as Secs);
+        assert_eq!(moved.warnings[0], c.warnings[0]);
+        assert_eq!(moved.warnings[1], c.warnings[1]);
     }
 }

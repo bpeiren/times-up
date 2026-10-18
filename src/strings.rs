@@ -48,8 +48,8 @@ pub const BANNER_TEXT: &str = "The running class has temporary changes from the 
 pub const BANNER_REPLACE: &str = "Replace (Enter)";
 pub const BANNER_SAVE_ONLY: &str = "Save only (Esc)";
 
-pub const DETAIL_HINT: &str = "Select a class to edit its break and warning times";
-pub const TIP_IDLE: &str = "Drag the lines to change the break and the warning and final times";
+pub const DETAIL_HINT: &str = "Select a class to edit its breaks and warning times";
+pub const TIP_IDLE: &str = "Drag the lines to change the breaks and the warning and final times";
 pub const TIP_ADDING: &str = "Click where the break should be; Esc cancels";
 pub const TIP_CLASS: &str = "Class";
 pub const TIP_BLOCK: &str = "Block";

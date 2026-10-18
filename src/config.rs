@@ -398,44 +398,65 @@ impl Problems {
                 return None;
             }
         };
-        class.warnings = [config.warnings; 2];
-
-        // Break: break_start / break_len in minutes; break_len = 0 removes the break.
-        let start_item = t.get("break_start");
-        let len_item = t.get("break_len");
-        if start_item.is_some() || len_item.is_some() {
-            let len = len_item
+        // Breaks: `breaks = [{ start, len }, ...]` in minutes (`[]` for none). The older
+        // break_start / break_len (len = 0 for none) still work. Without any of them the class
+        // keeps the default break rule.
+        let breaks_item = t.get("breaks");
+        let old_start = t.get("break_start");
+        let old_len = t.get("break_len");
+        let chosen = if breaks_item.is_some() && (old_start.is_some() || old_len.is_some()) {
+            self.add(format!(
+                "{at}: breaks and break_start/break_len are both set; using the default breaks"
+            ));
+            None
+        } else if let Some(item) = breaks_item {
+            match break_list(item) {
+                Some(list) => Some(list),
+                None => {
+                    self.add(format!(
+                        "{at}: breaks must be a list like [{{ start = 45, len = 10 }}] in minutes; using the default breaks"
+                    ));
+                    None
+                }
+            }
+        } else if old_start.is_some() || old_len.is_some() {
+            let len = old_len
                 .and_then(|i| number_secs(i, MINUTE))
                 .unwrap_or(config.default_break);
-            let brk = if len == 0 {
-                Some(None)
+            Some(if len == 0 {
+                Vec::new()
             } else {
-                let start = start_item
+                let start = old_start
                     .and_then(|i| number_secs(i, MINUTE))
                     .unwrap_or_else(|| class.duration().saturating_sub(len) / 2);
-                Some(Some(Break { start, len }))
-            };
-            match brk.map(|b| class.clone().with_break(b)) {
-                Some(Ok(c)) => class = c,
-                Some(Err(e)) => self.add(format!(
-                    "{at}: break_start/break_len: {e}; using the default break"
-                )),
-                None => {}
+                vec![Break { start, len }]
+            })
+        } else {
+            None
+        };
+        if let Some(list) = chosen {
+            match class.clone().with_breaks(list) {
+                Ok(c) => class = c,
+                Err(e) => self.add(format!("{at}: breaks: {e}; using the default breaks")),
             }
         }
+        let blocks = class.block_count();
+        class.warnings = vec![config.warnings; blocks];
 
-        // Thresholds: one number for every block, or one per block ([block 1, block 2]).
+        // Thresholds: one number for every block, or one per block.
         let warning_item = t.get(key_of(t, "warning", "orange"));
         let final_item = t.get(key_of(t, "final", "red"));
-        let warning = warning_item.and_then(|i| per_block(i, MINUTE));
-        let final_ = final_item.and_then(|i| per_block(i, MINUTE));
+        let warning = warning_item.and_then(|i| per_block(i, MINUTE, blocks));
+        let final_ = final_item.and_then(|i| per_block(i, MINUTE, blocks));
         if warning_item.is_some() && warning.is_none() || final_item.is_some() && final_.is_none() {
-            self.add(format!("{at}: warning/final must be a number or a list of numbers of at least 0; using the defaults"));
+            self.add(format!(
+                "{at}: warning/final must be a number or a list with a number for each of the {blocks} block(s), at least 0; using the defaults"
+            ));
         }
-        for b in 0..2 {
+        for b in 0..blocks {
             let w = Warnings {
-                warning: warning.map_or(class.warnings[b].warning, |o| o[b]),
-                final_: final_.map_or(class.warnings[b].final_, |r| r[b]),
+                warning: warning.as_ref().map_or(class.warnings[b].warning, |o| o[b]),
+                final_: final_.as_ref().map_or(class.warnings[b].final_, |r| r[b]),
             };
             match Warnings::new(w.warning, w.final_) {
                 Ok(w) => class.warnings[b] = w,
@@ -459,21 +480,47 @@ fn number_secs(item: &Item, unit: Secs) -> Option<Secs> {
         .then(|| (v * (unit as f64)).round() as Secs)
 }
 
-/// `5` -> `[5, 5]`, `[10]` -> `[10, 10]`, `[10, 8]` -> `[10, 8]` (converted to seconds).
-fn per_block(item: &Item, unit: Secs) -> Option<[Secs; 2]> {
+/// A threshold for each of `blocks` blocks, converted to seconds: `5` and `[5]` give the same
+/// value for every block, a list gives one value per block. A list of two also fits a class with
+/// one block (files written before classes could have several breaks always held two values, and
+/// the first is the one that counts).
+fn per_block(item: &Item, unit: Secs, blocks: usize) -> Option<Vec<Secs>> {
     if let Some(v) = number_secs(item, unit) {
-        return Some([v, v]);
+        return Some(vec![v; blocks]);
     }
-    let arr = item.as_array()?;
-    let mut out = arr
+    let values = item
+        .as_array()?
         .iter()
-        .map(|v| number_secs(&Item::Value(v.clone()), unit));
-    let first = out.next()??;
-    let second = match out.next() {
-        Some(v) => v?,
-        None => first,
+        .map(|v| number_secs(&Item::Value(v.clone()), unit))
+        .collect::<Option<Vec<_>>>()?;
+    match values.len() {
+        1 => Some(vec![values[0]; blocks]),
+        2 if blocks == 1 => Some(vec![values[0]]),
+        n if n == blocks => Some(values),
+        _ => None,
+    }
+}
+
+/// `[{ start = 45, len = 10 }, ...]` (minutes from the class start) as breaks.
+fn break_list(item: &Item) -> Option<Vec<Break>> {
+    let secs = |t: &dyn TableLike, key: &str| number_secs(t.get(key)?, MINUTE);
+    let tables: Vec<&dyn TableLike> = match item {
+        Item::ArrayOfTables(a) => a.iter().map(|t| t as &dyn TableLike).collect(),
+        Item::Value(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_inline_table().map(|t| t as &dyn TableLike))
+            .collect::<Option<_>>()?,
+        _ => return None,
     };
-    out.next().is_none().then_some([first, second])
+    tables
+        .into_iter()
+        .map(|t| {
+            Some(Break {
+                start: secs(t, "start")?,
+                len: secs(t, "len")?,
+            })
+        })
+        .collect()
 }
 
 /// `"08:30"` -> seconds since midnight; `"24:00"` is the end of the day.
@@ -517,10 +564,24 @@ fn minutes_value(secs: Secs) -> Value {
     }
 }
 
-fn pair_value(a: Secs, b: Secs) -> Value {
+/// The thresholds of the blocks as a list of minutes.
+fn list_value(secs: impl Iterator<Item = Secs>) -> Value {
     let mut arr = toml_edit::Array::new();
-    arr.push(minutes_value(a));
-    arr.push(minutes_value(b));
+    for s in secs {
+        arr.push(minutes_value(s));
+    }
+    Value::Array(arr)
+}
+
+/// The breaks as `[{ start = 45, len = 10 }, ...]` in minutes.
+fn breaks_value(breaks: &[Break]) -> Value {
+    let mut arr = toml_edit::Array::new();
+    for b in breaks {
+        let mut t = toml_edit::InlineTable::new();
+        t.insert("start", minutes_value(b.start));
+        t.insert("len", minutes_value(b.len));
+        arr.push(Value::InlineTable(t));
+    }
     Value::Array(arr)
 }
 
@@ -541,7 +602,7 @@ fn set_window(doc: &mut DocumentMut, name: &str, rect: &WindowRect) {
     set("height", rect.height.map(i64::from));
 }
 
-/// Write the break and warning thresholds of `class` into the entry with the same start and end.
+/// Write the breaks and warning thresholds of `class` into the entry with the same start and end.
 fn set_class(doc: &mut DocumentMut, day: Weekday, class: &Class) -> Result<(), ConfigError> {
     let name = DAYS[day.index()].0;
     let classes = doc
@@ -557,19 +618,17 @@ fn set_class(doc: &mut DocumentMut, day: Weekday, class: &Class) -> Result<(), C
         })
         .ok_or(ConfigError::ClassNotFound)?;
 
-    let (brk_start, brk_len) = class.brk.map_or((None, 0), |b| (Some(b.start), b.len));
-    if let Some(s) = brk_start {
-        entry.insert("break_start", Item::Value(minutes_value(s)));
-    } else {
-        entry.remove("break_start");
-    }
-    entry.insert("break_len", Item::Value(minutes_value(brk_len)));
-    let [w1, w2] = class.warnings;
+    // A file from before classes could have several breaks: its old keys give way to the new one.
+    entry.remove("break_start");
+    entry.remove("break_len");
+    entry.insert("breaks", Item::Value(breaks_value(&class.breaks)));
     // A file from before the zones were renamed: its old keys give way to the new ones.
     entry.remove("orange");
     entry.remove("red");
-    entry.insert("warning", Item::Value(pair_value(w1.warning, w2.warning)));
-    entry.insert("final", Item::Value(pair_value(w1.final_, w2.final_)));
+    let warning = list_value(class.warnings.iter().map(|w| w.warning));
+    let final_ = list_value(class.warnings.iter().map(|w| w.final_));
+    entry.insert("warning", Item::Value(warning));
+    entry.insert("final", Item::Value(final_));
     Ok(())
 }
 
@@ -670,17 +729,15 @@ fn class_value(class: &Class, default_break: Secs, defaults: Warnings) -> Value 
     t.insert("start", format_time(class.start).into());
     t.insert("end", format_time(class.end).into());
     let standard = Class::new(class.start, class.end, default_break).ok();
-    if standard.as_ref().map(|c| c.brk) != Some(class.brk) {
-        let (start, len) = class.brk.map_or((None, 0), |b| (Some(b.start), b.len));
-        if let Some(s) = start {
-            t.insert("break_start", minutes_value(s));
-        }
-        t.insert("break_len", minutes_value(len));
+    if standard.as_ref().map(|c| &c.breaks) != Some(&class.breaks) {
+        t.insert("breaks", breaks_value(&class.breaks));
     }
-    let [w1, w2] = class.warnings;
-    if w1 != defaults || w2 != defaults {
-        t.insert("warning", pair_value(w1.warning, w2.warning));
-        t.insert("final", pair_value(w1.final_, w2.final_));
+    if class.warnings.iter().any(|w| *w != defaults) {
+        t.insert(
+            "warning",
+            list_value(class.warnings.iter().map(|w| w.warning)),
+        );
+        t.insert("final", list_value(class.warnings.iter().map(|w| w.final_)));
     }
     Value::InlineTable(t)
 }
@@ -825,7 +882,7 @@ impl ConfigFile {
         Ok(parse(&text))
     }
 
-    /// Store the break and warning thresholds of `class` as its defaults (the file entry with the
+    /// Store the breaks and warning thresholds of `class` as its defaults (the file entry with the
     /// same start and end), leaving the rest of the file as it was.
     pub fn save_class(&mut self, day: Weekday, class: &Class) -> Result<(), ConfigError> {
         self.edit(|doc| set_class(doc, day, class))
@@ -939,8 +996,8 @@ mod tests {
         }
         assert!(c.schedule.classes(Weekday::Sat).is_empty());
         // The 10:25-12:05 sample is 100 minutes and so has a break.
-        assert!(c.schedule.classes(Weekday::Mon)[2].brk.is_some());
-        assert!(c.schedule.classes(Weekday::Mon)[0].brk.is_none());
+        assert!(!c.schedule.classes(Weekday::Mon)[2].breaks.is_empty());
+        assert!(c.schedule.classes(Weekday::Mon)[0].breaks.is_empty());
     }
 
     #[test]
@@ -1071,11 +1128,11 @@ classes = [
         assert_eq!(loaded.problems, Vec::<String>::new());
         let classes = loaded.config.schedule.classes(Weekday::Mon).to_vec();
         assert_eq!(
-            classes[0].brk,
-            Some(Break {
+            classes[0].breaks,
+            vec![Break {
                 start: mins(40),
                 len: mins(20)
-            })
+            }]
         );
         assert_eq!(
             classes[0].warnings[0],
@@ -1091,16 +1148,16 @@ classes = [
                 final_: mins(3)
             }
         );
-        assert_eq!(
-            classes[1].brk, None,
+        assert!(
+            classes[1].breaks.is_empty(),
             "break_len = 0 removes the default break"
         );
         assert_eq!(
-            classes[2].brk,
-            Some(Break {
+            classes[2].breaks,
+            vec![Break {
                 start: mins(45),
                 len: mins(10)
-            })
+            }]
         );
         assert_eq!(
             classes[2].warnings,
@@ -1111,10 +1168,10 @@ classes = [
         );
         assert_eq!(
             classes[3].warnings,
-            [Warnings {
+            vec![Warnings {
                 warning: mins(10),
                 final_: mins(4)
-            }; 2]
+            }]
         );
     }
 
@@ -1134,7 +1191,7 @@ end = "11:40"
         assert_eq!(loaded.problems, Vec::<String>::new());
         let classes = loaded.config.schedule.classes(Weekday::Tue);
         assert_eq!(classes.len(), 2);
-        assert!(classes[1].brk.is_some());
+        assert!(!classes[1].breaks.is_empty());
     }
 
     #[test]
@@ -1151,10 +1208,10 @@ classes = [{ start = "09:00", end = "09:50" }]
         let class = &loaded.config.schedule.classes(Weekday::Mon)[0];
         assert_eq!(
             class.warnings,
-            [Warnings {
+            vec![Warnings {
                 warning: mins(7),
                 final_: mins(3)
-            }; 2]
+            }]
         );
     }
 
@@ -1243,13 +1300,13 @@ classes = [
         // Classes 1, 5 (with the default break), 6 and 7 (with default thresholds) survive.
         assert_eq!(classes.len(), 4);
         assert_eq!(
-            classes[1].brk,
-            Some(Break {
+            classes[1].breaks,
+            vec![Break {
                 start: mins(45),
                 len: mins(10)
-            })
+            }]
         );
-        assert_eq!(classes[3].warnings, [Warnings::default(); 2]);
+        assert_eq!(classes[3].warnings, vec![Warnings::default()]);
     }
 
     #[test]
@@ -1480,10 +1537,10 @@ width = -5
 
         // Monday's 10:25-12:05 class: move the break and change the second block's warnings.
         let mut class = c.schedule.classes(Weekday::Mon)[2].clone();
-        class.brk = Some(Break {
+        class.breaks = vec![Break {
             start: mins(30),
             len: mins(15),
-        });
+        }];
         class.warnings[1] = Warnings {
             warning: mins(7),
             final_: mins(2),
@@ -1497,19 +1554,24 @@ width = -5
         c = parse(&text).config;
         assert_eq!(c.schedule.classes(Weekday::Mon)[2], class);
         // Other classes and other days are untouched.
-        assert_eq!(c.schedule.classes(Weekday::Mon)[0].brk, None);
+        assert!(c.schedule.classes(Weekday::Mon)[0].breaks.is_empty());
         assert_eq!(
-            c.schedule.classes(Weekday::Tue)[2].brk,
-            parse(DEFAULT_CONFIG).config.schedule.classes(Weekday::Tue)[2].brk
+            c.schedule.classes(Weekday::Tue)[2].breaks,
+            parse(DEFAULT_CONFIG).config.schedule.classes(Weekday::Tue)[2].breaks
         );
 
         // Removing the break writes break_len = 0 and drops break_start.
-        class.brk = None;
+        class.breaks.clear();
+        class.warnings.truncate(1);
         file.save_class(Weekday::Mon, &class).unwrap();
         let text = fs::read_to_string(dir.file()).unwrap();
         let again = parse(&text);
         assert_eq!(again.problems, Vec::<String>::new());
-        assert_eq!(again.config.schedule.classes(Weekday::Mon)[2].brk, None);
+        assert!(
+            again.config.schedule.classes(Weekday::Mon)[2]
+                .breaks
+                .is_empty()
+        );
     }
 
     // ---- files from before the zones were renamed ----
@@ -1569,7 +1631,7 @@ classes = [
 
         let text = fs::read_to_string(dir.file()).unwrap();
         assert!(
-            text.contains("warning = [6, 7]") && text.contains("final = [1, 3]"),
+            text.contains("warning = [6]") && text.contains("final = [1]"),
             "{text}"
         );
         assert!(
@@ -1593,10 +1655,10 @@ classes = [
         let mut file = ConfigFile::new(dir.file());
         let c = file.load_or_create().config;
         let mut class = c.schedule.classes(Weekday::Tue)[0].clone();
-        class.brk = Some(Break {
+        class.breaks = vec![Break {
             start: 2700 + 30,
             len: 630,
-        });
+        }];
         file.save_class(Weekday::Tue, &class).unwrap();
         let text = fs::read_to_string(dir.file()).unwrap();
         assert!(text.contains("# my first class"));
@@ -1636,5 +1698,212 @@ classes = [
         let p = default_path();
         assert_eq!(p.file_name().unwrap(), FILE_NAME);
         assert_eq!(p.parent(), std::env::current_exe().unwrap().parent());
+    }
+
+    // ---- several breaks ----
+
+    fn lab_class(extra: &str) -> Loaded {
+        parse(&format!(
+            "[monday]\nclasses = [{{ start = \"09:00\", end = \"12:00\"{extra} }}]\n"
+        ))
+    }
+
+    #[test]
+    fn a_breaks_list_gives_a_class_any_number_of_breaks() {
+        let loaded = lab_class(", breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }]");
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let class = &loaded.config.schedule.classes(Weekday::Mon)[0];
+        assert_eq!(
+            class.breaks,
+            vec![
+                Break {
+                    start: mins(50),
+                    len: mins(10)
+                },
+                Break {
+                    start: mins(110),
+                    len: mins(10)
+                }
+            ]
+        );
+        assert_eq!(class.block_count(), 3);
+        assert_eq!(class.warnings, vec![Warnings::default(); 3]);
+    }
+
+    #[test]
+    fn an_empty_breaks_list_means_no_breaks_and_a_missing_one_the_default() {
+        let none = lab_class(", breaks = []");
+        assert_eq!(none.problems, Vec::<String>::new());
+        assert!(
+            none.config.schedule.classes(Weekday::Mon)[0]
+                .breaks
+                .is_empty()
+        );
+        let default = lab_class("");
+        assert_eq!(
+            default.config.schedule.classes(Weekday::Mon)[0]
+                .breaks
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn old_and_new_break_keys_together_give_the_default_breaks_and_a_message() {
+        let loaded = lab_class(", breaks = [], break_len = 5");
+        assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
+        assert!(
+            loaded.problems[0].contains("both set"),
+            "{:?}",
+            loaded.problems
+        );
+        let class = &loaded.config.schedule.classes(Weekday::Mon)[0];
+        assert_eq!(class.breaks.len(), 1, "the default break");
+    }
+
+    #[test]
+    fn breaks_that_do_not_fit_or_are_not_a_list_give_the_default_breaks_and_a_message() {
+        for extra in [
+            ", breaks = [{ start = 50, len = 10 }, { start = 55, len = 10 }]",
+            ", breaks = [{ start = 175, len = 10 }]",
+            ", breaks = 5",
+            ", breaks = [{ start = 50 }]",
+            ", breaks = [3]",
+        ] {
+            let loaded = lab_class(extra);
+            assert_eq!(loaded.problems.len(), 1, "{extra}: {:?}", loaded.problems);
+            let class = &loaded.config.schedule.classes(Weekday::Mon)[0];
+            assert_eq!(class.breaks.len(), 1, "{extra}: the default break");
+        }
+    }
+
+    #[test]
+    fn thresholds_are_given_per_block() {
+        let loaded = lab_class(
+            ", breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }], warning = [10, 8, 6], final = [5, 4, 3]",
+        );
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let w = &loaded.config.schedule.classes(Weekday::Mon)[0].warnings;
+        let pair = |a, b| Warnings {
+            warning: mins(a),
+            final_: mins(b),
+        };
+        assert_eq!(*w, vec![pair(10, 5), pair(8, 4), pair(6, 3)]);
+
+        // One number, or a list of one, goes for every block.
+        let loaded = lab_class(
+            ", breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }], warning = 7, final = [2]",
+        );
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let w = &loaded.config.schedule.classes(Weekday::Mon)[0].warnings;
+        assert_eq!(*w, vec![pair(7, 2); 3]);
+    }
+
+    #[test]
+    fn a_threshold_list_of_the_wrong_length_gives_the_defaults_and_a_message() {
+        let loaded = lab_class(
+            ", breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }], warning = [10, 8], final = [5, 4]",
+        );
+        assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
+        let w = &loaded.config.schedule.classes(Weekday::Mon)[0].warnings;
+        assert_eq!(*w, vec![Warnings::default(); 3]);
+    }
+
+    #[test]
+    fn a_pair_of_thresholds_from_before_several_breaks_still_loads() {
+        // Two values on a class with the default break (two blocks) and on one without a break.
+        let loaded = parse(
+            "[monday]\nclasses = [{ start = \"09:00\", end = \"10:40\", warning = [10, 8], final = [5, 4] }, { start = \"11:00\", end = \"11:50\", warning = [9, 8], final = [3, 2] }]\n",
+        );
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let classes = loaded.config.schedule.classes(Weekday::Mon);
+        assert_eq!(classes[0].warnings[1].warning, mins(8));
+        assert_eq!(classes[1].warnings.len(), 1);
+        assert_eq!(classes[1].warnings[0].warning, mins(9));
+    }
+
+    #[test]
+    fn saving_a_class_with_several_breaks_writes_the_list_and_removes_the_old_keys() {
+        let dir = TempDir::new("several-breaks");
+        fs::write(
+            dir.file(),
+            "[monday]\nclasses = [{ start = \"09:00\", end = \"12:00\", break_start = 40, break_len = 20 }]\n",
+        )
+        .unwrap();
+        let mut file = ConfigFile::new(dir.file());
+        let mut class = file.load_or_create().config.schedule.classes(Weekday::Mon)[0].clone();
+        class = class
+            .with_breaks(vec![
+                Break {
+                    start: mins(50),
+                    len: mins(10),
+                },
+                Break {
+                    start: mins(110),
+                    len: mins(10),
+                },
+            ])
+            .unwrap();
+        class.warnings[2] = Warnings {
+            warning: mins(4),
+            final_: mins(1),
+        };
+        file.save_class(Weekday::Mon, &class).unwrap();
+
+        let text = fs::read_to_string(dir.file()).unwrap();
+        assert!(
+            text.contains("breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("break_start") && !text.contains("break_len"),
+            "{text}"
+        );
+        assert!(
+            text.contains("warning = [10, 10, 4]") && text.contains("final = [5, 5, 1]"),
+            "{text}"
+        );
+        let loaded = parse(&text);
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.config.schedule.classes(Weekday::Mon)[0], class);
+    }
+
+    #[test]
+    fn saving_a_day_writes_breaks_only_when_they_differ_from_the_default_rule() {
+        let dir = TempDir::new("day-breaks");
+        fs::write(dir.file(), "[monday]\nclasses = []\n").unwrap();
+        let mut file = ConfigFile::new(dir.file());
+        let standard = Class::new(hm(9, 0), hm(10, 40), DEFAULT_BREAK_LEN).unwrap();
+        let three = Class::new(hm(11, 0), hm(14, 0), DEFAULT_BREAK_LEN)
+            .unwrap()
+            .with_breaks(vec![
+                Break {
+                    start: mins(50),
+                    len: mins(10),
+                },
+                Break {
+                    start: mins(110),
+                    len: mins(10),
+                },
+            ])
+            .unwrap();
+        let none = Class::new(hm(15, 0), hm(17, 0), DEFAULT_BREAK_LEN)
+            .unwrap()
+            .with_breaks(Vec::new())
+            .unwrap();
+        let classes = vec![standard, three, none];
+        file.save_day(
+            Weekday::Mon,
+            &classes,
+            DEFAULT_BREAK_LEN,
+            Warnings::default(),
+        )
+        .unwrap();
+        let text = fs::read_to_string(dir.file()).unwrap();
+        assert_eq!(text.matches("breaks =").count(), 2, "{text}");
+        assert!(text.contains("breaks = []"), "{text}");
+        let loaded = parse(&text);
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.config.schedule.classes(Weekday::Mon), &classes[..]);
     }
 }

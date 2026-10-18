@@ -306,14 +306,15 @@ mod tests {
         let dir = Scratch::new("break", SAMPLE);
         let mut store = dir.store();
         let long = class((9, 0), (10, 40));
-        assert!(long.brk.is_some());
+        assert!(!long.breaks.is_empty());
         let mut moved = class((11, 0), (12, 40));
-        moved.brk = Some(Break {
+        moved.breaks = vec![Break {
             start: 30 * MINUTE,
             len: 5 * MINUTE,
-        });
+        }];
         let mut gone = class((13, 0), (14, 40));
-        gone.brk = None;
+        gone.breaks.clear();
+        gone.warnings.truncate(1);
         let mut warned = class((15, 0), (15, 50));
         warned.warnings[0] = crate::schedule::Warnings::new(8 * MINUTE, 3 * MINUTE).unwrap();
         let classes = vec![long, moved, gone, warned];
@@ -382,7 +383,8 @@ mod tests {
         let dir = Scratch::new("live", SAMPLE);
         let mut store = dir.store();
         let mut live = store.schedule().classes(Weekday::Mon)[0].clone();
-        live.brk = None;
+        live.breaks.clear();
+        live.warnings.truncate(1);
         store.set_live(Weekday::Mon, live);
         let rect = WindowRect {
             x: Some(5),
@@ -400,8 +402,9 @@ mod tests {
         let dir = Scratch::new(name, SAMPLE);
         let mut store = dir.store();
         let mut live = store.schedule().classes(Weekday::Mon)[0].clone();
-        assert!(live.brk.is_some());
-        live.brk = None;
+        assert!(!live.breaks.is_empty());
+        live.breaks.clear();
+        live.warnings.truncate(1);
         store.set_live(Weekday::Mon, live.clone());
         (dir, store, live)
     }
@@ -410,7 +413,7 @@ mod tests {
     fn the_bar_sees_the_live_class_and_the_saved_schedule_does_not() {
         let (_dir, store, live) = with_live("live-view");
         assert_eq!(store.live_schedule().classes(Weekday::Mon)[0], live);
-        assert!(store.schedule().classes(Weekday::Mon)[0].brk.is_some());
+        assert!(!store.schedule().classes(Weekday::Mon)[0].breaks.is_empty());
         assert_eq!(store.live_base().map(|(i, _)| i), Some(0));
         assert_eq!(store.live().map(|l| l.day), Some(Weekday::Mon));
     }
@@ -460,7 +463,7 @@ mod tests {
         let touched = store.set_day(Weekday::Mon, classes).unwrap();
         assert!(!touched, "the running class was not edited");
         let saved = crate::config::parse(&dir.text()).config;
-        assert!(saved.schedule.classes(Weekday::Mon)[0].brk.is_some());
+        assert!(!saved.schedule.classes(Weekday::Mon)[0].breaks.is_empty());
         // The bar still shows the live version.
         assert_eq!(store.live_schedule().classes(Weekday::Mon)[0], live);
         assert_eq!(store.live_schedule().classes(Weekday::Mon).len(), 2);
@@ -562,7 +565,7 @@ mod tests {
 
         let classes = store.schedule().classes(Weekday::Mon);
         assert_eq!(
-            classes[0].brk.unwrap().len,
+            classes[0].breaks[0].len,
             20 * MINUTE,
             "no own break: the default"
         );
@@ -693,7 +696,7 @@ mod tests {
         store.set_day(Weekday::Mon, vec![c.clone()]).unwrap();
         let text = dir.text();
         assert!(
-            text.contains("warning = [6, 7]") && text.contains("final = [1, 3]"),
+            text.contains("warning = [6]") && text.contains("final = [1]"),
             "{text}"
         );
         assert!(

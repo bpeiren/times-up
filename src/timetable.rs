@@ -235,9 +235,10 @@ fn snap(t: i64) -> i64 {
     (t + step / 2).div_euclid(step) * step
 }
 
-/// `original` stretched or moved to `start..end`. A moved class keeps its break and zones; a
-/// resized one keeps its zones and its break when that still fits, and a class that had the
-/// default break gets the default break for its new length.
+/// `original` stretched or moved to `start..end`. A moved class keeps its breaks and zones; a
+/// resized one keeps its zones and its breaks when they still fit, and a class that had the
+/// default break gets the default break for its new length. Zones are kept per block, the last
+/// block's zones filling in for blocks the class did not have before.
 fn with_span(original: &Class, start: Secs, end: Secs, default_break: Secs) -> Class {
     let mut class = original.clone();
     class.start = start;
@@ -246,20 +247,21 @@ fn with_span(original: &Class, start: Secs, end: Secs, default_break: Secs) -> C
         return class;
     }
     let had_default = Class::new(original.start, original.end, default_break)
-        .is_ok_and(|c| c.brk == original.brk);
+        .is_ok_and(|c| c.breaks == original.breaks);
     let Ok(mut resized) = Class::new(start, end, default_break) else {
         return class;
     };
-    resized.warnings = original.warnings;
     if !had_default {
-        resized = match original.brk {
-            Some(b) => resized.clone().with_break(Some(b)).unwrap_or(resized),
-            None => Class {
-                brk: None,
-                ..resized
-            },
-        };
+        resized = resized
+            .clone()
+            .with_breaks(original.breaks.clone())
+            .or_else(|_| resized.with_breaks(Vec::new()))
+            .unwrap_or_else(|_| class.clone());
     }
+    let last = original.warnings.last().copied().unwrap_or_default();
+    resized.warnings = (0..resized.block_count())
+        .map(|i| original.warnings.get(i).copied().unwrap_or(last))
+        .collect();
     resized
 }
 
@@ -508,7 +510,7 @@ impl Timetable {
         let Ok(mut class) = Class::new(start, end, default_break) else {
             return;
         };
-        class.warnings = [warnings; 2];
+        class.warnings = vec![warnings; class.block_count()];
         classes.push(class.clone());
         self.save(store, day, classes);
         if self.error.is_none() {
@@ -1159,29 +1161,32 @@ mod tests {
     #[test]
     fn a_moved_class_keeps_its_break_and_a_default_break_follows_a_resize() {
         let custom = class(hm(9, 0), hm(10, 40))
-            .with_break(Some(Break {
+            .with_breaks(vec![Break {
                 start: 30 * 60,
                 len: 5 * 60,
-            }))
+            }])
             .unwrap();
         let moved = with_span(&custom, hm(11, 0), hm(12, 40), DEFAULT_BREAK_LEN);
-        assert_eq!(moved.brk, custom.brk);
+        assert_eq!(moved.breaks, custom.breaks);
         let resized = with_span(&custom, hm(9, 0), hm(11, 0), DEFAULT_BREAK_LEN);
-        assert_eq!(resized.brk, custom.brk, "a custom break stays if it fits");
+        assert_eq!(
+            resized.breaks, custom.breaks,
+            "a custom break stays if it fits"
+        );
         let tiny = with_span(&custom, hm(9, 0), hm(9, 20), DEFAULT_BREAK_LEN);
-        assert_eq!(tiny.brk, None, "and goes if it cannot");
+        assert!(tiny.breaks.is_empty(), "and goes if it cannot");
 
         let plain = class(hm(9, 0), hm(9, 50));
-        assert_eq!(plain.brk, None);
+        assert!(plain.breaks.is_empty());
         let long = with_span(&plain, hm(9, 0), hm(11, 0), DEFAULT_BREAK_LEN);
         assert_eq!(
-            long.brk,
-            class(hm(9, 0), hm(11, 0)).brk,
+            long.breaks,
+            class(hm(9, 0), hm(11, 0)).breaks,
             "gets the default break"
         );
-        let no_break = class(hm(9, 0), hm(10, 40)).with_break(None).unwrap();
+        let no_break = class(hm(9, 0), hm(10, 40)).with_breaks(Vec::new()).unwrap();
         let wider = with_span(&no_break, hm(9, 0), hm(11, 0), DEFAULT_BREAK_LEN);
-        assert_eq!(wider.brk, None, "a deliberate no-break stays");
+        assert!(wider.breaks.is_empty(), "a deliberate no-break stays");
         let mut warned = plain.clone();
         warned.warnings[0] = crate::schedule::Warnings::new(8 * 60, 2 * 60).unwrap();
         assert_eq!(
@@ -1217,7 +1222,7 @@ mod tests {
         view.add_class(&mut store, Weekday::Wed);
         let c = &store.schedule().classes(Weekday::Wed)[0];
         assert_eq!((c.start, c.end), (hm(8, 30), hm(9, 20)));
-        assert_eq!(c.warnings, [store.config().warnings; 2]);
+        assert_eq!(c.warnings, vec![store.config().warnings; 1]);
     }
 
     #[test]
@@ -1370,5 +1375,28 @@ mod tests {
             drawn.contains(&expected),
             "the drag label {expected}: {drawn:?}"
         );
+    }
+
+    #[test]
+    fn a_resized_class_keeps_every_break_that_fits_and_the_zones_of_every_block() {
+        let brk = |start: u32, len: u32| crate::schedule::Break {
+            start: start * 60,
+            len: len * 60,
+        };
+        let custom = crate::schedule::Warnings::new(3 * 60, 60).unwrap();
+        let lab = class(hm(9, 0), hm(12, 0))
+            .with_breaks(vec![brk(50, 10), brk(110, 10)])
+            .unwrap()
+            .with_warnings(2, custom)
+            .unwrap();
+        let longer = with_span(&lab, hm(9, 0), hm(13, 0), DEFAULT_BREAK_LEN);
+        assert_eq!(longer.breaks, lab.breaks);
+        assert_eq!(longer.warnings, lab.warnings);
+        let shorter = with_span(&lab, hm(9, 0), hm(10, 20), DEFAULT_BREAK_LEN);
+        assert!(shorter.breaks.is_empty(), "they go when they cannot fit");
+        assert_eq!(shorter.warnings, vec![lab.warnings[0]]);
+        let moved = with_span(&lab, hm(14, 0), hm(17, 0), DEFAULT_BREAK_LEN);
+        assert_eq!(moved.breaks, lab.breaks);
+        assert_eq!(moved.warnings, lab.warnings);
     }
 }

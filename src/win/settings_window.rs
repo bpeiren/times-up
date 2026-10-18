@@ -1130,8 +1130,8 @@ classes = [{ start = \"09:00\", end = \"09:50\" }]
         mouse(hwnd, WM_LBUTTONDOWN, x, y);
         mouse(hwnd, WM_LBUTTONUP, x, y);
         let class = store.borrow().schedule().classes(Weekday::Mon)[0].clone();
-        assert!(class.brk.is_some());
-        assert!(dir.text().contains("break_len"), "{}", dir.text());
+        assert!(!class.breaks.is_empty());
+        assert!(dir.text().contains("breaks = ["), "{}", dir.text());
         close(hwnd);
     }
 
@@ -1145,9 +1145,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         let store = dir.store();
         let hwnd = open(store.clone()).unwrap();
         let l = select_monday(hwnd);
-        let before = store.borrow().schedule().classes(Weekday::Mon)[0]
-            .brk
-            .unwrap();
+        let before = store.borrow().schedule().classes(Weekday::Mon)[0].breaks[0];
         let duration = 100 * 60;
         let at = |secs: u32| {
             l.bar.x + (i64::from(secs) * i64::from(l.bar.w) / i64::from(duration)) as i32
@@ -1159,9 +1157,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         assert_eq!(store.borrow().revision(), 0, "not saved while dragging");
         mouse(hwnd, WM_LBUTTONUP, at(before.start - 5 * 60), y);
 
-        let after = store.borrow().schedule().classes(Weekday::Mon)[0]
-            .brk
-            .unwrap();
+        let after = store.borrow().schedule().classes(Weekday::Mon)[0].breaks[0];
         assert!(after.start < before.start, "{before:?} -> {after:?}");
         assert_eq!(after.end(), before.end());
         assert_eq!(store.borrow().revision(), 1);
@@ -1257,7 +1253,9 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         unsafe { state_of(hwnd) }.unwrap().banner.is_some()
     }
 
+    /// Select the break in the middle of the 100 minute class, then remove it.
     fn remove_break(hwnd: HWND, l: &detail::Layout) {
+        click(hwnd, l.bar.x + l.bar.w / 2, l.bar.y + l.bar.h / 2);
         click(hwnd, l.remove.x + 3, l.remove.y + 3);
     }
 
@@ -1274,8 +1272,8 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         assert!(store.borrow().live().is_some(), "until the teacher chooses");
         assert!(
             store.borrow().schedule().classes(Weekday::Mon)[0]
-                .brk
-                .is_none()
+                .breaks
+                .is_empty()
         );
         close(hwnd);
     }
@@ -1310,7 +1308,7 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
             "the bar keeps its version"
         );
         assert!(
-            dir.text().contains("break_len = 0"),
+            dir.text().contains("breaks = []"),
             "while the file has the new one"
         );
         close(hwnd);
@@ -1348,9 +1346,9 @@ classes = [{ start = \"09:00\", end = \"10:40\" }]
         mouse(hwnd, WM_MOUSEMOVE, x, y);
         click(hwnd, x, y);
         assert!(
-            store.borrow().schedule().classes(Weekday::Mon)[0]
-                .brk
-                .is_some()
+            !store.borrow().schedule().classes(Weekday::Mon)[0]
+                .breaks
+                .is_empty()
         );
         assert!(!banner_shown(hwnd), "already answered for this class");
         assert!(store.borrow().live().is_some(), "Save only still holds");

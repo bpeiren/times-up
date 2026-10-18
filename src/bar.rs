@@ -90,17 +90,21 @@ pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
 
     let segments = segments(class);
     let middle = |start: Secs, end: Secs| (share(start) + share(end)) / 2.0;
-    let label_center = match (focus, class.brk) {
-        (Focus::Block(i), _) => {
+    let label_center = match focus {
+        Focus::Block(i) => {
             let b = class.block(i);
             middle(b.start, b.end)
         }
-        (Focus::LastBlock, _) => {
+        Focus::LastBlock => {
             let b = class.block(class.block_count() - 1);
             middle(b.start, b.end)
         }
-        (Focus::Break, Some(b)) => middle(b.start, b.end()),
-        (Focus::Break, None) | (Focus::Whole, _) => 0.5,
+        Focus::Break => class
+            .breaks
+            .iter()
+            .find(|b| b.start <= progress_secs && progress_secs < b.end())
+            .map_or(0.5, |b| middle(b.start, b.end())),
+        Focus::Whole => 0.5,
     };
     Some(BarView {
         label_center,
@@ -110,11 +114,11 @@ pub fn view(schedule: &Schedule, day: Weekday, now: Secs) -> Option<BarView> {
     })
 }
 
-/// The blocks and the break of `class` as shares of the whole class.
+/// The blocks and the breaks of `class` as shares of the whole class.
 fn segments(class: &Class) -> Vec<Segment> {
     let total = class.duration().max(1) as f32;
     let share = |secs: Secs| secs as f32 / total;
-    let mut segments = Vec::with_capacity(3);
+    let mut segments = Vec::with_capacity(class.block_count() * 2);
     for index in 0..class.block_count() {
         let block = class.block(index);
         let w = class.warnings[index];
@@ -126,9 +130,7 @@ fn segments(class: &Class) -> Vec<Segment> {
                 red_at: share(block.end - w.final_.min(block.len())),
             },
         });
-        if index == 0
-            && let Some(b) = class.brk
-        {
+        if let Some(b) = class.breaks.get(index) {
             segments.push(Segment {
                 start: share(b.start),
                 end: share(b.end()),
@@ -390,7 +392,7 @@ mod tests {
             start: 30 * MINUTE,
             len: 20 * MINUTE,
         };
-        let c = class(hm(9, 0), hm(10, 40)).with_break(Some(brk)).unwrap();
+        let c = class(hm(9, 0), hm(10, 40)).with_breaks(vec![brk]).unwrap();
         let s = schedule(vec![c]);
         let at = |m: u32| view(&s, MON, hm(9, 0) + m * MINUTE).unwrap().label_center;
         assert!(close(at(10), 0.15), "block 1 is now 0..30%: {}", at(10));
@@ -420,7 +422,7 @@ mod tests {
             len: 20 * MINUTE,
         };
         let c = class(hm(9, 0), hm(10, 40))
-            .with_break(Some(brk))
+            .with_breaks(vec![brk])
             .unwrap()
             .with_warnings(1, Warnings::new(20 * MINUTE, 8 * MINUTE).unwrap())
             .unwrap();
@@ -590,5 +592,68 @@ mod tests {
             let mut canvas = Canvas::new(w, h);
             paint(&mut canvas, &v, &colors());
         }
+    }
+
+    // ---- several breaks ----
+
+    /// 09:00-12:00 with breaks at 50..60 and 110..120.
+    fn lab() -> Class {
+        let brk = |start: u32, len: u32| crate::schedule::Break {
+            start: start * MINUTE,
+            len: len * MINUTE,
+        };
+        class(hm(9, 0), hm(12, 0))
+            .with_breaks(vec![brk(50, 10), brk(110, 10)])
+            .unwrap()
+    }
+
+    #[test]
+    fn a_class_with_two_breaks_draws_three_blocks_and_two_breaks() {
+        let v = class_view(&lab());
+        let kinds: Vec<bool> = v
+            .segments
+            .iter()
+            .map(|s| matches!(s.kind, SegmentKind::Break))
+            .collect();
+        assert_eq!(kinds, [false, true, false, true, false]);
+        let edge = |i: usize| (v.segments[i].start * 180.0, v.segments[i].end * 180.0);
+        let near = |(a, b): (f32, f32), (c, d): (f32, f32)| close(a, c) && close(b, d);
+        assert!(near(edge(0), (0.0, 50.0)), "{:?}", edge(0));
+        assert!(near(edge(1), (50.0, 60.0)));
+        assert!(near(edge(2), (60.0, 110.0)));
+        assert!(near(edge(3), (110.0, 120.0)));
+        assert!(near(edge(4), (120.0, 180.0)));
+    }
+
+    #[test]
+    fn the_label_sits_on_the_break_or_block_that_is_counted_down() {
+        let s = schedule(vec![lab()]);
+        let at = |m: u32| view(&s, MON, hm(9, 0) + m * MINUTE).unwrap();
+        assert!(close(at(10).label_center, 25.0 / 180.0));
+        assert!(close(at(55).label_center, 55.0 / 180.0), "first break");
+        assert!(close(at(80).label_center, 85.0 / 180.0), "second block");
+        assert!(close(at(115).label_center, 115.0 / 180.0), "second break");
+        assert_eq!(at(115).label, "Break 05:00");
+        assert!(close(at(150).label_center, 150.0 / 180.0), "third block");
+    }
+
+    #[test]
+    fn every_block_has_its_own_zones() {
+        let c = lab()
+            .with_warnings(1, Warnings::new(20 * MINUTE, 8 * MINUTE).unwrap())
+            .unwrap();
+        let v = class_view(&c);
+        let SegmentKind::Block { orange_at, red_at } = v.segments[2].kind else {
+            panic!()
+        };
+        // Block 2 ends at 110 minutes: 20 and 8 minutes before that.
+        assert!(close(orange_at * 180.0, 90.0) && close(red_at * 180.0, 102.0));
+        let SegmentKind::Block { orange_at, .. } = v.segments[4].kind else {
+            panic!()
+        };
+        assert!(
+            close(orange_at * 180.0, 170.0),
+            "block 3 keeps the defaults"
+        );
     }
 }
