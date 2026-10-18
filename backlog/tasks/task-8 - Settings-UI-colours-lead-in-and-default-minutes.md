@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-14 18:43'
-updated_date: '2026-10-17 21:20'
+updated_date: '2026-10-18 05:34'
 labels: []
 dependencies:
   - TASK-7
@@ -59,6 +59,8 @@ Colours, the lead-in and linger times and the default break and warning minutes 
 
 <!-- SECTION:NOTES:BEGIN -->
 Colours: the swatch opens the system colour dialog (comdlg32, part of Windows); opacity is only offered for the track (10% steps), other colours keep their alpha. A small bar previews all six colours. Reset colours writes the defaults. Numbers are stepped with - and + within fixed ranges (lead-in 0-60 min, linger 0-300 s in 5 s steps, default break 1-30 min, orange and red 0-60 min); red above orange is refused with a message, so invalid values cannot be written. Every change is saved on the click. set_general re-reads the file so classes without their own break or thresholds follow the new defaults; comments on the changed lines survive. Verified: 376 lib tests + 4 integration tests, clippy clean. The real colour dialog was not driven by hand (tests inject the picker). Release exe 517,632 bytes (505,344 before, +12,288; limit 650 KB).
+
+Zones renamed by use: Lesson (was green), Warning (orange), Final minutes (red) in labels, code and the config file. New keys: [colors] lesson/warning/final, [general] warning_minutes/final_minutes, per class warning/final. Old keys are still read (the new key wins when both are there); whatever the app writes uses the new keys and removes the old ones; keys it does not touch stay as they are. The General tab is first and the window opens on it. Saving a class default from the bar now bumps the store revision so an open Settings window redraws.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
