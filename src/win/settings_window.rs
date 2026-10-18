@@ -489,7 +489,7 @@ pub fn open_with(
     let state = Box::new(State {
         store,
         canvas: Canvas::new(1, 1),
-        section: Section::Timetable,
+        section: Section::General,
         timetable: Timetable::default(),
         detail: Detail::default(),
         general: Page::default(),
@@ -988,6 +988,15 @@ mod tests {
         close(hwnd);
     }
 
+    #[test]
+    fn the_window_opens_on_the_general_tab() {
+        let dir = Scratch::new("opens-general", "");
+        let hwnd = open(dir.store()).unwrap();
+        // SAFETY: on the window's thread.
+        assert_eq!(unsafe { state_of(hwnd) }.unwrap().section, Section::General);
+        close(hwnd);
+    }
+
     /// Send a mouse message at client position `(x, y)`.
     fn mouse(hwnd: HWND, msg: u32, x: i32, y: i32) {
         let lparam = LPARAM(((y & 0xffff) << 16 | (x & 0xffff)) as isize);
@@ -1005,6 +1014,8 @@ classes = [{ start = \"09:00\", end = \"09:50\" }]
     fn class_and_plus(hwnd: HWND) -> ((i32, i32), (i32, i32)) {
         // SAFETY: on the window's thread; the borrow ends with this function.
         let state = unsafe { state_of(hwnd) }.unwrap();
+        // The window opens on General; these tests work on the timetable.
+        state.section = Section::Timetable;
         let week = state.week_layout(hwnd);
         let class = state.store.borrow().schedule().classes(Weekday::Mon)[0].clone();
         let r = week.class_rect(0, &class);
