@@ -13,7 +13,7 @@ groma:
 description: Reads and updates times-up.toml next to the exe
 ---
 
-Parses colours, thresholds, break defaults, window rectangle and the per-weekday classes. A bad value is reported and replaced by its default, never fatal. The file is created with a commented sample when missing, is polled each tick so edits apply live, and is updated in place (window position, per-class defaults) so comments survive. Read-only locations fall back to defaults.
+Parses colours, thresholds, break defaults, window rectangle and the per-weekday classes, each with a list of breaks (`breaks = [{ start, len }]`) and a threshold per block; the older break_start/break_len keys and pairs of thresholds still load. A bad value is reported and replaced by its default, never fatal. The file is created with a commented sample when missing, is polled each tick so edits apply live, and is updated in place (window position, per-class defaults) so comments survive. Read-only locations fall back to defaults.
 
 ## Relationships
 

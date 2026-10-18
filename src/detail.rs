@@ -1,6 +1,7 @@
 //! The detail bar of the Settings window: the selected class drawn large, like the live bar, with
-//! its break and its warning and final zones draggable (the rules are those of [`editing`]), plus
-//! the Add break and Remove break buttons. Plain Rust without Win32, like [`crate::timetable`]:
+//! its breaks and its warning and final zones draggable (the rules are those of [`editing`]), plus
+//! the Add break and Remove break buttons. A break is selected by clicking it; Remove break takes
+//! out the selected one. Plain Rust without Win32, like [`crate::timetable`]:
 //! the window feeds it pointer positions and draws the text through a callback.
 //!
 //! A drag changes a preview only; the day is saved through the store when the button is released.
@@ -50,6 +51,12 @@ const NO_FIT: Rgba = Rgba {
     g: 60,
     b: 60,
     a: 170,
+};
+const SELECTED: Rgba = Rgba {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 230,
 };
 const ERROR: Rgba = Rgba::rgb(0xff, 0x8a, 0x80);
 
@@ -114,9 +121,20 @@ pub enum Target {
     Bar,
 }
 
-/// Whether a break fits in `class`: both blocks keep at least the minimum length.
+/// Whether a break fits in `class`: every block around it keeps at least the minimum length.
 pub fn break_fits(class: &Class, brk: &Break) -> bool {
-    brk.len > 0 && brk.start >= MIN_BLOCK && brk.end() + MIN_BLOCK <= class.duration()
+    brk.len > 0
+        && brk.start >= MIN_BLOCK
+        && brk.end() + MIN_BLOCK <= class.duration()
+        && class
+            .breaks
+            .iter()
+            .all(|b| brk.end() + MIN_BLOCK <= b.start || b.end() + MIN_BLOCK <= brk.start)
+}
+
+/// Whether `class` has room for one more break of `len`.
+pub fn has_room(class: &Class, len: Secs) -> bool {
+    (0..class.block_count()).any(|i| class.block(i).len() >= len + 2 * MIN_BLOCK)
 }
 
 /// The break the Add break mode shows when the pointer is `offset` seconds into the class: its
@@ -160,9 +178,10 @@ fn tip(class: &Class, offset: Secs, handle: Option<Handle>) -> Option<String> {
         };
         return Some(format!("{name} {} {}", strings::TIP_FROM, label.text));
     }
-    if let Some(b) = class.brk
-        && offset >= b.start
-        && offset < b.end()
+    if let Some(b) = class
+        .breaks
+        .iter()
+        .find(|b| offset >= b.start && offset < b.end())
     {
         return Some(format!(
             "{}  {}",
@@ -202,6 +221,8 @@ pub struct Detail {
     preview: Option<Class>,
     /// The Add break mode is on for this class.
     adding: Option<Key>,
+    /// The selected break (its position in the class) of the selected class.
+    chosen: Option<(Key, usize)>,
     pointer: Option<(i32, i32)>,
     error: Option<String>,
     /// A save changed the running class that has temporary changes on the bar.
@@ -239,6 +260,19 @@ impl Detail {
 
     fn adding_for(&self, day: Weekday, class: &Class) -> bool {
         self.adding == Some(Self::key(day, class))
+    }
+
+    /// The selected break of `class`, if there is one.
+    fn chosen_for(&self, day: Weekday, class: &Class) -> Option<usize> {
+        self.chosen
+            .filter(|&(key, n)| key == Self::key(day, class) && n < class.breaks.len())
+            .map(|(_, n)| n)
+    }
+
+    /// Whether a break of `class` is selected.
+    pub fn has_selected_break(&self, store: &Store, selection: Option<(Weekday, usize)>) -> bool {
+        selected_class(store, selection)
+            .is_some_and(|(day, _, class)| self.chosen_for(day, class).is_some())
     }
 
     fn grip(layout: &Layout) -> f32 {
@@ -309,28 +343,37 @@ impl Detail {
         };
         let class = class.clone();
         match self.target(layout, x, y) {
-            Target::AddBreak if class.brk.is_none() => {
+            Target::AddBreak if has_room(&class, store.config().default_break) => {
                 let key = Self::key(day, &class);
                 self.adding = (self.adding != Some(key)).then_some(key);
             }
-            Target::RemoveBreak if class.brk.is_some() => {
-                self.adding = None;
-                let mut without = class;
-                without.brk = None;
-                self.save(store, day, index, without);
+            Target::RemoveBreak => {
+                self.remove_selected_break(store, selection);
             }
             Target::Bar if self.adding_for(day, &class) => {
                 let len = store.config().default_break;
                 let brk = proposed_break(Self::offset_at(layout, &class, x), len);
                 if break_fits(&class, &brk)
-                    && let Ok(with) = class.clone().with_break(Some(brk))
+                    && let Ok(with) = class.clone().add_break(brk)
                 {
                     self.adding = None;
+                    self.chosen = with
+                        .breaks
+                        .iter()
+                        .position(|b| *b == brk)
+                        .map(|n| (Self::key(day, &with), n));
                     self.save(store, day, index, with);
                 }
             }
             Target::Bar => {
-                if let Some(handle) = Self::handle_at(layout, &class, x) {
+                let handle = Self::handle_at(layout, &class, x);
+                self.chosen = match handle {
+                    Some(Handle::BreakStart(n) | Handle::BreakEnd(n) | Handle::BreakBody(n)) => {
+                        Some((Self::key(day, &class), n))
+                    }
+                    _ => None,
+                };
+                if let Some(handle) = handle {
                     self.grab = Some(Grab {
                         day,
                         index,
@@ -342,6 +385,28 @@ impl Detail {
             }
             _ => {}
         }
+    }
+
+    /// Remove the selected break, if there is one (the Remove break button and the Delete key).
+    /// Returns whether there was one.
+    pub fn remove_selected_break(
+        &mut self,
+        store: &mut Store,
+        selection: Option<(Weekday, usize)>,
+    ) -> bool {
+        let Some((day, index, class)) = selected_class(store, selection) else {
+            return false;
+        };
+        let Some(n) = self.chosen_for(day, class) else {
+            return false;
+        };
+        let class = class.clone();
+        self.adding = None;
+        self.chosen = None;
+        if let Ok(without) = class.remove_break(n) {
+            self.save(store, day, index, without);
+        }
+        true
     }
 
     /// The pointer moved. Returns whether the detail bar has to be repainted.
@@ -379,21 +444,29 @@ impl Detail {
         self.preview = None;
     }
 
-    /// Keep the Add break mode only while the class it was started for is still the selected one:
-    /// selecting something else ends it, and selecting the class again does not bring it back.
+    /// Keep the Add break mode and the selected break only while the class they belong to is still
+    /// the selected one: selecting something else ends them, and selecting the class again does
+    /// not bring them back.
     pub fn sync(&mut self, store: &Store, selection: Option<(Weekday, usize)>) {
         let key = selected_class(store, selection).map(|(day, _, class)| Self::key(day, class));
         if self.adding != key {
             self.adding = None;
         }
+        if self.chosen.map(|(k, _)| k) != key {
+            self.chosen = None;
+        }
     }
 
-    /// Escape: leave the Add break mode, or give up a drag. Returns whether it did anything.
+    /// Escape: leave the Add break mode, or give up a drag, or else let go of the selected break.
+    /// Returns whether it did anything.
     pub fn escape(&mut self) -> bool {
         let used = self.adding.is_some() || self.grab.is_some();
         self.adding = None;
         self.cancel();
-        used
+        if used {
+            return true;
+        }
+        self.chosen.take().is_some()
     }
 
     fn save(&mut self, store: &mut Store, day: Weekday, index: usize, class: Class) {
@@ -450,7 +523,9 @@ impl Detail {
             format_length(class.duration())
         );
         text(canvas, &title, layout.title, colors.text, Align::Left);
-        let (can_add, can_remove) = (class.brk.is_none(), class.brk.is_some());
+        let can_add = has_room(class, store.config().default_break);
+        let chosen = self.chosen_for(day, class);
+        let can_remove = chosen.is_some();
         let on = |enabled: bool| if enabled { colors.text } else { DIM };
         fill(canvas, layout.add, BUTTON, 6.0);
         text(
@@ -469,7 +544,7 @@ impl Detail {
             Align::Center,
         );
 
-        self.paint_bar(canvas, store, class, adding, layout, &colors);
+        self.paint_bar(canvas, store, class, chosen, adding, layout);
         let (info, color) = self.info(store, class, adding, layout, &colors);
         text(canvas, &info, layout.info, color, Align::Left);
     }
@@ -479,10 +554,11 @@ impl Detail {
         canvas: &mut Canvas,
         store: &Store,
         class: &Class,
+        chosen: Option<usize>,
         adding: bool,
         layout: &Layout,
-        colors: &Colors,
     ) {
+        let colors = &store.config().colors;
         let bar_rect = layout.bar;
         let (w, h) = (bar_rect.w.max(1) as u32, bar_rect.h.max(1) as u32);
         let mut bar_canvas = Canvas::new(w, h);
@@ -500,6 +576,16 @@ impl Detail {
                 let x = at * w as f32 - tick / 2.0;
                 let rect = RectF::new(x, h as f32 * 0.25, tick, h as f32 * 0.5);
                 bar_canvas.fill_rounded_rect(rect, 0.0, TICK, None);
+            }
+        }
+
+        if let Some(n) = chosen {
+            let per_px = w as f32 / class.duration().max(1) as f32;
+            let b = class.breaks[n];
+            let frame = (h as f32 / 14.0).max(2.0);
+            for y in [0.0, h as f32 - frame] {
+                let rect = RectF::new(b.start as f32 * per_px, y, b.len as f32 * per_px, frame);
+                bar_canvas.fill_rounded_rect(rect, 0.0, SELECTED, None);
             }
         }
 
@@ -571,7 +657,7 @@ impl Detail {
 
 fn handle_cursor(handle: Handle) -> CursorShape {
     match handle {
-        Handle::BreakBody => CursorShape::SizeAll,
+        Handle::BreakBody(_) => CursorShape::SizeAll,
         _ => CursorShape::SizeWestEast,
     }
 }
@@ -761,10 +847,10 @@ mod tests {
 
         assert!(!view.is_dragging());
         assert_eq!(store.revision(), 1);
-        let brk = class_of(&store).brk.unwrap();
+        let brk = class_of(&store).breaks[0];
         assert!(brk.start > 49 * 60 && brk.start < 51 * 60, "{brk:?}");
         assert_eq!(brk.end(), 55 * 60, "the other edge stays");
-        assert_eq!(dir.reloaded().brk, Some(brk), "and it is in the file");
+        assert_eq!(dir.reloaded().breaks, vec![brk], "and it is in the file");
     }
 
     #[test]
@@ -816,6 +902,10 @@ mod tests {
         view.press(&mut store, SELECTED, &l, x, y);
         assert!(view.escape());
         assert!(!view.is_dragging());
+        assert!(
+            view.escape(),
+            "the break the drag started on is still selected"
+        );
         assert!(!view.escape(), "nothing left to cancel");
     }
 
@@ -842,7 +932,7 @@ mod tests {
         let mut view = Detail::default();
         let l = lay();
         let class = class_of(&store);
-        assert_eq!(class.brk, None);
+        assert!(class.breaks.is_empty());
         view.press(&mut store, SELECTED, &l, l.add.x + 3, l.add.y + 3);
         assert!(view.is_adding());
         let x = col(&l, &class, 20 * 60);
@@ -855,13 +945,13 @@ mod tests {
         view.press(&mut store, SELECTED, &l, x, y);
 
         assert!(!view.is_adding(), "one click ends the mode");
-        let brk = class_of(&store).brk.unwrap();
+        let brk = class_of(&store).breaks[0];
         assert_eq!(brk.len, store.config().default_break);
         assert!(
             brk.start > 14 * 60 && brk.start < 16 * 60,
             "centred on the click: {brk:?}"
         );
-        assert_eq!(dir.reloaded().brk, Some(brk));
+        assert_eq!(dir.reloaded().breaks, vec![brk]);
         assert_eq!(store.revision(), 1);
     }
 
@@ -877,7 +967,7 @@ mod tests {
         view.press(&mut store, SELECTED, &l, col(&l, &class, 2 * 60), y);
         view.press(&mut store, SELECTED, &l, col(&l, &class, 48 * 60), y);
         assert!(view.is_adding(), "still looking for a place");
-        assert_eq!(class_of(&store).brk, None);
+        assert!(class_of(&store).breaks.is_empty());
         assert_eq!(store.revision(), 0);
         assert!(view.escape());
         assert!(!view.is_adding());
@@ -913,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn the_add_break_button_toggles_the_mode_and_needs_a_class_without_a_break() {
+    fn the_add_break_button_toggles_the_mode_and_needs_room_for_a_break() {
         let dir = Scratch::new("toggle", "09:00", "09:50");
         let mut store = dir.store();
         let mut view = Detail::default();
@@ -926,21 +1016,45 @@ mod tests {
         let long = Scratch::new("toggle-long", "09:00", "10:40");
         let mut store = long.store();
         view.press(&mut store, SELECTED, &l, l.add.x + 3, l.add.y + 3);
-        assert!(!view.is_adding(), "this class has a break already");
+        assert!(view.is_adding(), "a break fits next to the one it has");
+        view.escape();
+
+        let tiny = Scratch::new("toggle-tiny", "09:00", "09:19");
+        let mut store = tiny.store();
+        view.press(&mut store, SELECTED, &l, l.add.x + 3, l.add.y + 3);
+        assert!(
+            !view.is_adding(),
+            "no block has room for a break and two blocks"
+        );
+    }
+
+    /// Click the break at `secs` into the class (press and release) to select it.
+    fn select_break(view: &mut Detail, store: &mut Store, l: &Layout, secs: u32) {
+        let class = class_of(store);
+        view.press(store, SELECTED, l, col(l, &class, secs), mid_y(l));
+        view.release(store);
     }
 
     #[test]
-    fn remove_break_stores_a_zero_length_break() {
+    fn remove_break_needs_a_selected_break_and_stores_an_empty_list() {
         let dir = Scratch::new("remove", "09:00", "10:40");
         let mut store = dir.store();
         let mut view = Detail::default();
         let l = lay();
-        assert!(class_of(&store).brk.is_some());
+        assert!(!class_of(&store).breaks.is_empty());
         view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
-        assert_eq!(class_of(&store).brk, None);
+        assert!(!class_of(&store).breaks.is_empty(), "no break is selected");
+        assert_eq!(store.revision(), 0);
+
+        select_break(&mut view, &mut store, &l, 50 * 60);
+        assert!(view.has_selected_break(&store, SELECTED));
+        assert_eq!(store.revision(), 0, "selecting saves nothing");
+        view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
+        assert!(class_of(&store).breaks.is_empty());
+        assert!(!view.has_selected_break(&store, SELECTED));
         assert_eq!(store.revision(), 1);
-        assert!(dir.text().contains("break_len = 0"), "{}", dir.text());
-        assert_eq!(dir.reloaded().brk, None);
+        assert!(dir.text().contains("breaks = []"), "{}", dir.text());
+        assert!(dir.reloaded().breaks.is_empty());
 
         // Nothing to remove the second time.
         view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
@@ -953,6 +1067,7 @@ mod tests {
         let mut store = dir.store();
         let mut view = Detail::default();
         let l = lay();
+        select_break(&mut view, &mut store, &l, 50 * 60);
         view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
         view.press(&mut store, SELECTED, &l, l.add.x + 3, l.add.y + 3);
         let class = class_of(&store);
@@ -972,9 +1087,10 @@ mod tests {
         let mut store = dir.store();
         let mut view = Detail::default();
         let l = lay();
+        select_break(&mut view, &mut store, &l, 50 * 60);
         fs::write(dir.0.join(config::FILE_NAME), "this is [not toml").unwrap();
         view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
-        assert!(class_of(&store).brk.is_some());
+        assert!(!class_of(&store).breaks.is_empty());
         let mut drawn = Vec::new();
         let mut canvas = Canvas::new(860, 600);
         view.paint(&mut canvas, &store, SELECTED, &l, &mut |_, t, _, c, _| {
@@ -1062,11 +1178,15 @@ mod tests {
         );
         assert!(texts.contains(&strings::TIP_IDLE));
         let color_of = |text: &str| drawn.iter().find(|(t, _, _)| t == text).unwrap().1;
-        assert_eq!(color_of(strings::BUTTON_REMOVE_BREAK), colors.text);
+        assert_eq!(
+            color_of(strings::BUTTON_REMOVE_BREAK),
+            DIM,
+            "no break is selected"
+        );
         assert_eq!(
             color_of(strings::BUTTON_ADD_BREAK),
-            DIM,
-            "it has a break already"
+            colors.text,
+            "there is room for another break"
         );
     }
 
@@ -1184,5 +1304,171 @@ mod tests {
         };
         assert_eq!(align("Monday"), Align::Left);
         assert_eq!(align(strings::BUTTON_ADD_BREAK), Align::Center);
+    }
+
+    // ---- several breaks ----
+
+    /// A 180 minute class (one default break at 85..95) with the selection on it.
+    fn lab_class(name: &str) -> (Scratch, Store, Detail, Layout) {
+        let dir = Scratch::new(name, "09:00", "12:00");
+        let store = dir.store();
+        (dir, store, Detail::default(), lay())
+    }
+
+    fn click_bar(view: &mut Detail, store: &mut Store, l: &Layout, minute: u32) {
+        let class = class_of(store);
+        view.press(store, SELECTED, l, col(l, &class, minute * 60), mid_y(l));
+        view.release(store);
+    }
+
+    fn add_break_at(view: &mut Detail, store: &mut Store, l: &Layout, minute: u32) {
+        view.press(store, SELECTED, l, l.add.x + 3, l.add.y + 3);
+        let class = class_of(store);
+        let x = col(l, &class, minute * 60);
+        view.moved(l, x, mid_y(l));
+        view.press(store, SELECTED, l, x, mid_y(l));
+        view.release(store);
+    }
+
+    #[test]
+    fn more_breaks_can_be_added_and_each_new_one_is_selected() {
+        let (dir, mut store, mut view, l) = lab_class("add-several");
+        assert_eq!(class_of(&store).breaks.len(), 1);
+        add_break_at(&mut view, &mut store, &l, 30);
+        let class = class_of(&store);
+        assert_eq!(class.breaks.len(), 2);
+        assert_eq!(class.breaks[0].start, 25 * 60, "centred on the click");
+        assert_eq!(
+            view.chosen_for(MON, &class),
+            Some(0),
+            "the new one comes first"
+        );
+        assert!(!view.is_adding(), "the mode ends after each placement");
+        assert_eq!(class.warnings.len(), 3);
+
+        add_break_at(&mut view, &mut store, &l, 150);
+        let class = class_of(&store);
+        assert_eq!(class.breaks.len(), 3);
+        assert_eq!(view.chosen_for(MON, &class), Some(2));
+        assert_eq!(store.revision(), 2);
+        assert_eq!(dir.reloaded(), class);
+        assert!(
+            dir.text()
+                .contains("breaks = [{ start = 25, len = 10 }, { start = 85, len = 10 }, { start = 145, len = 10 }]"),
+            "{}",
+            dir.text()
+        );
+    }
+
+    #[test]
+    fn a_break_that_would_touch_another_is_refused_and_the_mode_stays_on() {
+        let (_dir, mut store, mut view, l) = lab_class("touching");
+        add_break_at(&mut view, &mut store, &l, 90);
+        assert_eq!(class_of(&store).breaks.len(), 1);
+        assert!(view.is_adding(), "so another place can be tried");
+        assert_eq!(store.revision(), 0);
+    }
+
+    #[test]
+    fn the_add_break_button_is_dim_when_no_block_has_room() {
+        let dir = Scratch::new("no-room-paint", "09:00", "09:19");
+        let store = dir.store();
+        let (_, drawn) = paint(&Detail::default(), &store, SELECTED);
+        let color_of = |text: &str| drawn.iter().find(|(t, _, _)| t == text).unwrap().1;
+        assert_eq!(color_of(strings::BUTTON_ADD_BREAK), DIM);
+    }
+
+    #[test]
+    fn clicking_a_break_selects_it_and_clicking_elsewhere_lets_go() {
+        let (_dir, mut store, mut view, l) = lab_class("click-select");
+        add_break_at(&mut view, &mut store, &l, 30);
+        click_bar(&mut view, &mut store, &l, 90);
+        let class = class_of(&store);
+        assert_eq!(view.chosen_for(MON, &class), Some(1), "the default break");
+        click_bar(&mut view, &mut store, &l, 60);
+        assert_eq!(view.chosen_for(MON, &class), None, "away from every handle");
+        assert_eq!(store.revision(), 1, "selecting saves nothing");
+    }
+
+    #[test]
+    fn pressing_a_break_selects_it_before_it_is_dragged() {
+        let (_dir, mut store, mut view, l) = lab_class("press-select");
+        let class = class_of(&store);
+        view.press(
+            &mut store,
+            SELECTED,
+            &l,
+            col(&l, &class, 90 * 60),
+            mid_y(&l),
+        );
+        assert!(view.is_dragging());
+        assert_eq!(view.chosen_for(MON, &class), Some(0));
+        view.cancel();
+    }
+
+    #[test]
+    fn remove_break_takes_out_only_the_selected_break() {
+        let (dir, mut store, mut view, l) = lab_class("remove-selected");
+        add_break_at(&mut view, &mut store, &l, 30);
+        add_break_at(&mut view, &mut store, &l, 150);
+        click_bar(&mut view, &mut store, &l, 90);
+        view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
+        let class = class_of(&store);
+        assert_eq!(
+            class
+                .breaks
+                .iter()
+                .map(|b| b.start / 60)
+                .collect::<Vec<_>>(),
+            [25, 145]
+        );
+        assert_eq!(class.warnings.len(), 3);
+        assert_eq!(dir.reloaded(), class);
+        assert_eq!(view.chosen_for(MON, &class), None);
+        // Nothing is selected any more, so the button does nothing.
+        let revision = store.revision();
+        view.press(&mut store, SELECTED, &l, l.remove.x + 3, l.remove.y + 3);
+        assert_eq!(store.revision(), revision);
+    }
+
+    #[test]
+    fn the_selected_break_is_framed_and_the_remove_button_comes_alive() {
+        let (_dir, mut store, mut view, l) = lab_class("frame");
+        let class = class_of(&store);
+        let frame_pixel = |view: &Detail, store: &Store| {
+            let (canvas, _) = paint(view, store, SELECTED);
+            canvas.pixel(col(&l, &class, 90 * 60) as u32, (l.bar.y + 1) as u32)
+        };
+        let before = frame_pixel(&view, &store);
+        click_bar(&mut view, &mut store, &l, 90);
+        assert_ne!(frame_pixel(&view, &store), before, "the top edge is lit");
+        let (_, drawn) = paint(&view, &store, SELECTED);
+        let remove = drawn
+            .iter()
+            .find(|(t, _, _)| t == strings::BUTTON_REMOVE_BREAK)
+            .unwrap();
+        assert_eq!(remove.1, store.config().colors.text);
+    }
+
+    #[test]
+    fn escape_and_another_class_let_go_of_the_selected_break() {
+        let (_dir, mut store, mut view, l) = lab_class("escape-select");
+        click_bar(&mut view, &mut store, &l, 90);
+        assert!(view.has_selected_break(&store, SELECTED));
+        assert!(view.escape());
+        assert!(!view.has_selected_break(&store, SELECTED));
+        assert!(!view.escape());
+
+        click_bar(&mut view, &mut store, &l, 90);
+        view.sync(&store, None);
+        assert!(
+            !view.has_selected_break(&store, SELECTED),
+            "no class selected"
+        );
+        view.sync(&store, SELECTED);
+        assert!(
+            !view.has_selected_break(&store, SELECTED),
+            "and it does not come back"
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 A small always-on-top class-hour timer for Windows. A bar on screen fills with the lesson colour, then the
 warning colour, then the final colour as the class hour runs out, so a teacher can keep track of time at a glance. A 100 minute class
-shows two blocks with a break in the middle.
+shows two blocks with a break in the middle, and a longer class can have as many breaks as you like.
 
 Written in Rust against the Win32 API (`windows` crate): one tiny exe, no installer, no runtime, and
 all settings in a text file next to it, so it is portable (a USB stick works).
@@ -23,7 +23,7 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
 - The text shows the time left in the current block, centred in that block; `Break mm:ss` during a
   break, centred on the break; or `Starts in mm:ss` before class.
 - Drag the bar to move it and its edges or corners to resize it; its place and size are remembered.
-- Drag the break, or a warning or final line, to change it for the class that is running. While you
+- Drag a break, or a warning or final line, to change it for the class that is running. While you
   drag, a small time at the bottom of the bar shows when that zone starts (`09:35`) or when the
   break starts and ends (`09:45-09:55`). The change is forgotten when the class is over, unless you
   right-click and choose *Save as default for this slot*.
@@ -33,8 +33,8 @@ commented sample timetable, next to itself. To upgrade, replace `times-up.exe`; 
   move it or drag its edges to resize it (5 minute steps, never over a neighbour), use the *+*
   button of a day to add a class, and *Remove class* or the Delete key to remove the selected one.
   The selected class is drawn large below the week: drag the break or the warning and final lines,
-  hover for times and durations, *Add break* (click where it should start, Esc cancels) and *Remove
-  break*. Changes are saved to `times-up.toml` when you let go of the mouse. If you change the
+  hover for times and durations, *Add break* (click where it should be, Esc cancels; as many as fit,
+  at least 5 minutes of lesson around each) and *Remove break* (click a break to select it first; the Delete key does the same, and removes the class when no break is selected). Changes are saved to `times-up.toml` when you let go of the mouse. If you change the
   break or the warning times of the class that is running while you have changed it on the bar
   too, a banner asks: *Replace* (Enter) puts the saved settings on the bar, *Save only* (Esc)
   keeps your temporary changes on the bar until the class ends. It asks once per running class;
@@ -75,13 +75,20 @@ break = "#bdc3c7"            # also track, text
 classes = [
   { start = "08:30", end = "09:20" },                 # 50 minutes: one block
   { start = "10:25", end = "12:05" },                 # 100 minutes: two blocks and a break
-  { start = "13:00", end = "14:40", break_start = 40, break_len = 20, warning = [10, 8], final = [5, 4] },
+  { start = "13:00", end = "14:40", breaks = [{ start = 40, len = 20 }], warning = [10, 8], final = [5, 4] },
+  { start = "15:00", end = "18:00", breaks = [{ start = 50, len = 10 }, { start = 110, len = 10 }] },  # three blocks
 ]
 ```
 
-Per class, `break_start` and `break_len` (minutes; `break_len = 0` means no break) and `warning` and
-`final` (one value, or one per block) are optional. The app writes the `[window]` section and, for
-*Save as default for this slot*, those per-class keys itself, keeping your comments.
+Per class, `breaks` (a list of `{ start, len }` in minutes from the class start; `breaks = []` means no
+break, and leaving it out gives the default break) and `warning` and `final` (one value for every
+block, or one value per block) are optional. Breaks may not overlap or touch, and every block between
+them needs at least a minute of lesson. The app writes the `[window]` section and, for *Save as
+default for this slot*, those per-class keys itself, keeping your comments.
+
+Files from before a class could have several breaks use `break_start` and `break_len` (`break_len = 0`
+for no break) and a pair of values for `warning` and `final`. Those are still read; when the app saves
+the class it writes `breaks` and a value per block instead.
 
 Older files name the zones after their colours: `green`, `orange` and `red` in `[colors]`,
 `orange_minutes` and `red_minutes` in `[general]`, and `orange` and `red` per class. Those are still
@@ -142,7 +149,7 @@ logic.
 | `bar` | Turns the schedule state into the bar and its label, and paints it |
 | `canvas` | The pixel buffer: anti-aliased rounded rectangles, text masks |
 | `interaction` | Hit testing, resizing, keeping the window on a connected monitor |
-| `editing` | Dragging the break and the warning zones, with clamping |
+| `editing` | Dragging the breaks and the warning zones, with clamping |
 | `win::window` | The borderless, transparent, always-on-top window and its mouse handling |
 | `win::app` | Start-up, the per-second work, saving, menu commands |
 | `store` | The one owner of the loaded settings: the file poll and every edit go through it, views redraw when its revision changes, and the bar's temporary changes are kept apart from the saved timetable |

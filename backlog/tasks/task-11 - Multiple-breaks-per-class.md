@@ -1,11 +1,36 @@
 ---
 id: TASK-11
 title: Multiple breaks per class
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-10-18 06:51'
+updated_date: '2026-10-18 07:07'
 labels: []
 dependencies: []
+references:
+  - schedule
+  - config
+  - bar
+  - editing
+modified_files:
+  - src/schedule.rs
+  - src/config.rs
+  - src/bar.rs
+  - src/editing.rs
+  - src/detail.rs
+  - src/timetable.rs
+  - src/store.rs
+  - src/strings.rs
+  - src/win/app.rs
+  - src/win/menu.rs
+  - src/win/settings_window.rs
+  - README.md
+  - assets/times-up.sample.toml
+  - groma/systems/time-s-up/containers/times-up/components/schedule.md
+  - groma/systems/time-s-up/containers/times-up/components/config.md
+  - groma/systems/time-s-up/containers/times-up/components/bar.md
+  - groma/systems/time-s-up/containers/times-up/components/editing.md
 type: feature
 ordinal: 33000
 ---
@@ -29,14 +54,32 @@ Delivered as one pull request; the subtasks are one or more commits on its branc
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A class can have any number of breaks that fit, shown on the bar and in the Settings detail bar
-- [ ] #2 Existing times-up.toml files with break_start/break_len or threshold pairs behave exactly as before
-- [ ] #3 Sample file, README and Groma docs describe the breaks list
-- [ ] #4 Existing tests are updated, not deleted, and new behaviour is covered by tests
+- [x] #1 A class can have any number of breaks that fit, shown on the bar and in the Settings detail bar
+- [x] #2 Existing times-up.toml files with break_start/break_len or threshold pairs behave exactly as before
+- [x] #3 Sample file, README and Groma docs describe the breaks list
+- [x] #4 Existing tests are updated, not deleted, and new behaviour is covered by tests
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 All AC are met.
-- [ ] #2 All code is covered by sensible tests. All tests pass.
+- [x] #1 All AC are met.
+- [x] #2 All code is covered by sensible tests. All tests pass.
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Delivered as one branch (feature/multiple-breaks) and one pull request, subtasks 11.1 to 11.5 as the commits and sections of it: model, file format, bar, editing and selection, Settings buttons and docs.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Decisions are in the description. The code is one commit because the crate has to compile at every step and the Class change touches every module; docs are a second commit.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+A class can have any number of breaks that fit, each block with its own thresholds; times-up.toml uses a breaks list and still reads the old keys. Verified by the unit and window-level tests of all five subtasks: all 418 tests pass (cargo test) and cargo clippy --all-targets is clean. The exe was not run by hand; the Settings window is exercised through its window messages in the tests.
+<!-- SECTION:FINAL_SUMMARY:END -->

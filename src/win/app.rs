@@ -877,9 +877,7 @@ mod tests {
     const H: i32 = 40;
 
     fn brk_of(app: &App, index: usize) -> Break {
-        app.store.borrow().live_schedule().classes(MON)[index]
-            .brk
-            .unwrap()
+        app.store.borrow().live_schedule().classes(MON)[index].breaks[0]
     }
 
     fn minutes(b: Break) -> (u32, u32) {
@@ -903,6 +901,39 @@ mod tests {
         assert!(app.menu_state().can_save_default);
         app.grab_end();
         assert!(app.grab.is_none());
+    }
+
+    #[test]
+    fn each_of_several_breaks_can_be_dragged_on_the_bar() {
+        let brk = |start: u32, len: u32| Break {
+            start: start * MINUTE,
+            len: len * MINUTE,
+        };
+        let lab = class(hm(9, 0), hm(12, 0))
+            .with_breaks(vec![brk(50, 10), brk(110, 10)])
+            .unwrap();
+        let mut app = app_with(vec![lab]);
+        // A bar 1800 px wide: 10 px per minute of the 180 minute class.
+        assert!(
+            app.grab_at(MON, hm(9, 30), 1150, 1800, H),
+            "the second break"
+        );
+        app.move_grab(-250); // 25 minutes earlier
+        let breaks = app.store.borrow().live_schedule().classes(MON)[0]
+            .breaks
+            .clone();
+        assert_eq!(breaks, vec![brk(50, 10), brk(85, 10)]);
+        app.grab_end();
+        assert!(app.grab_at(MON, hm(9, 30), 550, 1800, H), "the first break");
+        app.move_grab(100_000);
+        let breaks = app.store.borrow().live_schedule().classes(MON)[0]
+            .breaks
+            .clone();
+        assert_eq!(
+            breaks,
+            vec![brk(70, 10), brk(85, 10)],
+            "it stops five minutes before the second one"
+        );
     }
 
     #[test]
@@ -1156,12 +1187,12 @@ mod tests {
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         assert_eq!(loaded.config.schedule.classes(MON)[0], edited);
         assert_eq!(
-            minutes(loaded.config.schedule.classes(MON)[0].brk.unwrap()),
+            minutes(loaded.config.schedule.classes(MON)[0].breaks[0]),
             (55, 65)
         );
         // The other class in the file was not touched.
         assert_eq!(
-            minutes(loaded.config.schedule.classes(MON)[1].brk.unwrap()),
+            minutes(loaded.config.schedule.classes(MON)[1].breaks[0]),
             (45, 55)
         );
 

@@ -67,6 +67,10 @@ pub enum ScheduleError {
     EmptyClass,
     /// A break must leave a non-empty block on both sides.
     BreakOutsideClass,
+    /// Breaks must be in order, with a non-empty block between two of them.
+    BreaksOverlap,
+    /// A class needs one set of warning thresholds per block.
+    WarningsMismatch,
     /// The final zone must not be longer than the warning zone.
     FinalLongerThanWarning,
     /// Two classes overlap (back-to-back is fine).
@@ -78,6 +82,8 @@ impl fmt::Display for ScheduleError {
         f.write_str(match self {
             Self::EmptyClass => "a class must end after it starts",
             Self::BreakOutsideClass => "a break must lie strictly inside the class",
+            Self::BreaksOverlap => "breaks must not overlap or touch each other",
+            Self::WarningsMismatch => "a class needs warning thresholds for each of its blocks",
             Self::FinalLongerThanWarning => {
                 "the final zone must not be longer than the warning zone"
             }
@@ -159,9 +165,10 @@ impl Block {
 pub struct Class {
     pub start: Secs,
     pub end: Secs,
-    pub brk: Option<Break>,
-    /// Warning thresholds per block (the second entry is only used when there is a break).
-    pub warnings: [Warnings; 2],
+    /// The breaks in order; `n` breaks split the class into `n + 1` blocks.
+    pub breaks: Vec<Break>,
+    /// Warning thresholds per block: always one more than there are breaks.
+    pub warnings: Vec<Warnings>,
 }
 
 impl Class {
@@ -171,23 +178,50 @@ impl Class {
         let class = Self {
             start,
             end,
-            brk: None,
-            warnings: [Warnings::default(); 2],
+            breaks: Vec::new(),
+            warnings: vec![Warnings::default()],
         };
         let duration = class.duration();
         if end <= start || duration < TWO_HOUR_MIN_LEN {
-            return class.with_break(None);
+            return class.with_breaks(Vec::new());
         }
         let brk = Break {
             start: (duration.saturating_sub(default_break_len)) / 2,
             len: default_break_len,
         };
-        class.with_break(Some(brk))
+        class.with_breaks(vec![brk])
     }
 
-    /// Replace the break (`None` removes it).
-    pub fn with_break(mut self, brk: Option<Break>) -> Result<Self, ScheduleError> {
-        self.brk = brk;
+    /// Replace all breaks. The thresholds of the blocks are kept when the number of blocks stays
+    /// the same, otherwise every block gets the default thresholds again.
+    pub fn with_breaks(mut self, breaks: Vec<Break>) -> Result<Self, ScheduleError> {
+        if breaks.len() + 1 != self.warnings.len() {
+            self.warnings = vec![Warnings::default(); breaks.len() + 1];
+        }
+        self.breaks = breaks;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Add a break. It splits the block it lies in: the part before it is a new block with the
+    /// default thresholds, the part after it keeps the thresholds of the block, which are
+    /// measured from the end of the block.
+    pub fn add_break(mut self, brk: Break) -> Result<Self, ScheduleError> {
+        let at = self.breaks.partition_point(|b| b.start < brk.start);
+        self.breaks.insert(at, brk);
+        self.warnings.insert(at, Warnings::default());
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Remove break `index`. The two blocks around it become one, which keeps the thresholds of
+    /// the later one (they are measured from the end of the block).
+    pub fn remove_break(mut self, index: usize) -> Result<Self, ScheduleError> {
+        if index >= self.breaks.len() {
+            return Err(ScheduleError::BreakOutsideClass);
+        }
+        self.breaks.remove(index);
+        self.warnings.remove(index);
         self.validate()?;
         Ok(self)
     }
@@ -198,7 +232,8 @@ impl Class {
         block: usize,
         warnings: Warnings,
     ) -> Result<Self, ScheduleError> {
-        self.warnings[block.min(1)] = Warnings::new(warnings.warning, warnings.final_)?;
+        let last = self.warnings.len() - 1;
+        self.warnings[block.min(last)] = Warnings::new(warnings.warning, warnings.final_)?;
         Ok(self)
     }
 
@@ -206,10 +241,22 @@ impl Class {
         if self.end <= self.start {
             return Err(ScheduleError::EmptyClass);
         }
-        if let Some(b) = self.brk
-            && (b.len == 0 || b.start == 0 || b.end() >= self.duration())
-        {
-            return Err(ScheduleError::BreakOutsideClass);
+        if self.warnings.len() != self.breaks.len() + 1 {
+            return Err(ScheduleError::WarningsMismatch);
+        }
+        let duration = self.duration();
+        let mut free_from = 0;
+        for (i, b) in self.breaks.iter().enumerate() {
+            if b.len == 0 || b.end() >= duration {
+                return Err(ScheduleError::BreakOutsideClass);
+            }
+            if i == 0 && b.start == 0 {
+                return Err(ScheduleError::BreakOutsideClass);
+            }
+            if i > 0 && b.start <= free_from {
+                return Err(ScheduleError::BreaksOverlap);
+            }
+            free_from = b.end();
         }
         Ok(())
     }
@@ -219,25 +266,16 @@ impl Class {
         self.end.saturating_sub(self.start)
     }
 
-    pub const fn block_count(&self) -> usize {
-        if self.brk.is_some() { 2 } else { 1 }
+    pub fn block_count(&self) -> usize {
+        self.breaks.len() + 1
     }
 
-    /// Block `index` (0 or 1) as offsets from the class start.
+    /// Block `index` as offsets from the class start; an index past the last block gives the last.
     pub fn block(&self, index: usize) -> Block {
-        match (self.brk, index) {
-            (None, _) => Block {
-                start: 0,
-                end: self.duration(),
-            },
-            (Some(b), 0) => Block {
-                start: 0,
-                end: b.start,
-            },
-            (Some(b), _) => Block {
-                start: b.end(),
-                end: self.duration(),
-            },
+        let index = index.min(self.breaks.len());
+        Block {
+            start: index.checked_sub(1).map_or(0, |i| self.breaks[i].end()),
+            end: self.breaks.get(index).map_or(self.duration(), |b| b.start),
         }
     }
 }
@@ -367,9 +405,10 @@ impl Schedule {
     }
 
     fn inside(index: usize, c: &Class, elapsed: Secs) -> State {
-        if let Some(b) = c.brk
-            && b.start <= elapsed
-            && elapsed < b.end()
+        if let Some(b) = c
+            .breaks
+            .iter()
+            .find(|b| b.start <= elapsed && elapsed < b.end())
         {
             return State::Break {
                 class: index,
@@ -377,10 +416,7 @@ impl Schedule {
                 left: b.end() - elapsed,
             };
         }
-        let block = match c.brk {
-            Some(b) if elapsed >= b.end() => 1,
-            _ => 0,
-        };
+        let block = c.breaks.iter().filter(|b| b.end() <= elapsed).count();
         let left = c.block(block).end - elapsed;
         State::Running {
             class: index,
@@ -440,7 +476,7 @@ mod tests {
     #[test]
     fn fifty_minute_class_has_no_break() {
         let c = class(hm(9, 0), hm(9, 50));
-        assert_eq!(c.brk, None);
+        assert!(c.breaks.is_empty());
         assert_eq!(c.block_count(), 1);
         assert_eq!(
             c.block(0),
@@ -455,11 +491,11 @@ mod tests {
     fn hundred_minute_class_gets_centered_ten_minute_break() {
         let c = class(hm(9, 0), hm(10, 40));
         assert_eq!(
-            c.brk,
-            Some(Break {
+            c.breaks,
+            vec![Break {
                 start: 45 * MINUTE,
                 len: 10 * MINUTE
-            })
+            }]
         );
         assert_eq!(c.block_count(), 2);
         assert_eq!(
@@ -482,17 +518,17 @@ mod tests {
     fn default_break_length_is_configurable() {
         let c = Class::new(hm(9, 0), hm(10, 40), 20 * MINUTE).unwrap();
         assert_eq!(
-            c.brk,
-            Some(Break {
+            c.breaks,
+            vec![Break {
                 start: 40 * MINUTE,
                 len: 20 * MINUTE
-            })
+            }]
         );
     }
 
     #[test]
     fn classes_just_under_two_hours_get_no_break() {
-        assert_eq!(class(hm(9, 0), hm(10, 39)).brk, None);
+        assert!(class(hm(9, 0), hm(10, 39)).breaks.is_empty());
     }
 
     #[test]
@@ -502,9 +538,9 @@ mod tests {
             len: 5 * MINUTE,
         };
         let c = class(hm(9, 0), hm(10, 40))
-            .with_break(Some(custom))
+            .with_breaks(vec![custom])
             .unwrap();
-        assert_eq!(c.brk, Some(custom));
+        assert_eq!(c.breaks, vec![custom]);
         assert_eq!(
             c.block(1),
             Block {
@@ -512,7 +548,7 @@ mod tests {
                 end: 100 * MINUTE
             }
         );
-        assert_eq!(c.with_break(None).unwrap().block_count(), 1);
+        assert_eq!(c.with_breaks(Vec::new()).unwrap().block_count(), 1);
     }
 
     #[test]
@@ -545,7 +581,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                c.clone().with_break(Some(b)),
+                c.clone().with_breaks(vec![b]),
                 Err(ScheduleError::BreakOutsideClass),
                 "{b:?}"
             );
@@ -813,7 +849,7 @@ mod tests {
             start: 30 * MINUTE,
             len: 20 * MINUTE,
         };
-        let c = class(hm(9, 0), hm(10, 40)).with_break(Some(brk)).unwrap();
+        let c = class(hm(9, 0), hm(10, 40)).with_breaks(vec![brk]).unwrap();
         s.set_day(MON, vec![c]).unwrap();
         assert_eq!(
             s.state(MON, hm(9, 30)),
@@ -827,6 +863,185 @@ mod tests {
             s.state(MON, hm(9, 50)),
             running(0, 50 * MINUTE, 1, 50 * MINUTE, Zone::Lesson)
         );
+    }
+
+    // ---- several breaks ----
+
+    fn brk(start_min: u32, len_min: u32) -> Break {
+        Break {
+            start: start_min * MINUTE,
+            len: len_min * MINUTE,
+        }
+    }
+
+    /// 09:00-12:00 with breaks at 50-60 and 110-120: three blocks of 50, 50 and 60 minutes.
+    fn lab() -> Class {
+        Class::new(hm(9, 0), hm(12, 0), DEFAULT_BREAK_LEN)
+            .unwrap()
+            .with_breaks(vec![brk(50, 10), brk(110, 10)])
+            .unwrap()
+    }
+
+    #[test]
+    fn n_breaks_make_n_plus_one_blocks() {
+        let c = lab();
+        assert_eq!(c.block_count(), 3);
+        assert_eq!(c.warnings.len(), 3);
+        let block = |s, e| Block {
+            start: s * MINUTE,
+            end: e * MINUTE,
+        };
+        assert_eq!(c.block(0), block(0, 50));
+        assert_eq!(c.block(1), block(60, 110));
+        assert_eq!(c.block(2), block(120, 180));
+        assert_eq!(c.block(9), block(120, 180), "past the end gives the last");
+    }
+
+    #[test]
+    fn breaks_that_overlap_touch_or_leave_no_room_are_rejected() {
+        let c = lab();
+        assert_eq!(
+            c.clone()
+                .with_breaks(vec![brk(50, 10), brk(55, 10)])
+                .unwrap_err(),
+            ScheduleError::BreaksOverlap
+        );
+        assert_eq!(
+            c.clone()
+                .with_breaks(vec![brk(50, 10), brk(60, 10)])
+                .unwrap_err(),
+            ScheduleError::BreaksOverlap,
+            "touching"
+        );
+        assert_eq!(
+            c.clone()
+                .with_breaks(vec![brk(110, 10), brk(50, 10)])
+                .unwrap_err(),
+            ScheduleError::BreaksOverlap,
+            "out of order"
+        );
+        assert_eq!(
+            c.clone()
+                .with_breaks(vec![brk(50, 10), brk(110, 10), brk(175, 5)])
+                .unwrap_err(),
+            ScheduleError::BreakOutsideClass,
+            "no room left at the end"
+        );
+        assert!(
+            c.with_breaks(vec![brk(50, 10), brk(61, 10)]).is_ok(),
+            "one minute of lesson between two breaks is enough"
+        );
+    }
+
+    #[test]
+    fn a_class_with_too_few_thresholds_is_invalid() {
+        let mut c = lab();
+        c.warnings.pop();
+        assert_eq!(c.validate(), Err(ScheduleError::WarningsMismatch));
+        assert_eq!(
+            Schedule::new().set_day(MON, vec![c]),
+            Err(ScheduleError::WarningsMismatch)
+        );
+    }
+
+    #[test]
+    fn adding_a_break_splits_a_block_and_the_new_block_gets_the_defaults() {
+        let custom = Warnings::new(3 * MINUTE, MINUTE).unwrap();
+        let c = class(hm(9, 0), hm(10, 40))
+            .with_warnings(1, custom)
+            .unwrap()
+            .add_break(brk(70, 5))
+            .unwrap();
+        assert_eq!(c.breaks, vec![brk(45, 10), brk(70, 5)]);
+        assert_eq!(
+            c.warnings,
+            vec![Warnings::default(), Warnings::default(), custom]
+        );
+        // A break added before the others goes first in the list.
+        let c = c.add_break(brk(10, 5)).unwrap();
+        assert_eq!(c.breaks, vec![brk(10, 5), brk(45, 10), brk(70, 5)]);
+        assert_eq!(c.warnings.len(), 4);
+        assert_eq!(c.warnings[3], custom, "the last block keeps its own values");
+        assert_eq!(
+            c.add_break(brk(46, 5)),
+            Err(ScheduleError::BreaksOverlap),
+            "inside another break"
+        );
+    }
+
+    #[test]
+    fn removing_a_break_merges_two_blocks_and_the_other_blocks_keep_their_values() {
+        let (a, b, z) = (
+            Warnings::new(20 * MINUTE, 10 * MINUTE).unwrap(),
+            Warnings::new(15 * MINUTE, 7 * MINUTE).unwrap(),
+            Warnings::new(3 * MINUTE, MINUTE).unwrap(),
+        );
+        let c = lab()
+            .with_warnings(0, a)
+            .unwrap()
+            .with_warnings(1, b)
+            .unwrap()
+            .with_warnings(2, z)
+            .unwrap();
+        let first = c.clone().remove_break(0).unwrap();
+        assert_eq!(first.breaks, vec![brk(110, 10)]);
+        assert_eq!(first.warnings, vec![b, z]);
+        let last = c.clone().remove_break(1).unwrap();
+        assert_eq!(last.breaks, vec![brk(50, 10)]);
+        assert_eq!(last.warnings, vec![a, z]);
+        assert_eq!(
+            c.remove_break(2),
+            Err(ScheduleError::BreakOutsideClass),
+            "there is no third break"
+        );
+    }
+
+    #[test]
+    fn replacing_the_breaks_keeps_the_thresholds_only_if_the_block_count_stays() {
+        let custom = Warnings::new(3 * MINUTE, MINUTE).unwrap();
+        let c = lab().with_warnings(2, custom).unwrap();
+        let moved = c
+            .clone()
+            .with_breaks(vec![brk(40, 10), brk(100, 10)])
+            .unwrap();
+        assert_eq!(moved.warnings[2], custom);
+        let fewer = c.with_breaks(vec![brk(40, 10)]).unwrap();
+        assert_eq!(fewer.warnings, vec![Warnings::default(); 2]);
+    }
+
+    #[test]
+    fn state_walks_through_every_block_and_break() {
+        let mut s = Schedule::new();
+        let custom = Warnings::new(2 * MINUTE, MINUTE).unwrap();
+        s.set_day(MON, vec![lab().with_warnings(1, custom).unwrap()])
+            .unwrap();
+        let at = |m: u32, sec: u32| s.state(MON, hm(9, 0) + m * MINUTE + sec);
+        assert_eq!(at(49, 59), running(0, 49 * MINUTE + 59, 0, 1, Zone::Final));
+        assert!(matches!(at(50, 0), State::Break { left, .. } if left == 10 * MINUTE));
+        assert_eq!(
+            at(60, 0),
+            running(0, 60 * MINUTE, 1, 50 * MINUTE, Zone::Lesson)
+        );
+        // Block 2 uses its own thresholds: warning only in the last two minutes.
+        assert_eq!(
+            at(107, 59),
+            running(0, 107 * MINUTE + 59, 1, 2 * MINUTE + 1, Zone::Lesson)
+        );
+        assert_eq!(
+            at(108, 0),
+            running(0, 108 * MINUTE, 1, 2 * MINUTE, Zone::Warning)
+        );
+        assert!(matches!(at(110, 0), State::Break { left, .. } if left == 10 * MINUTE));
+        assert!(matches!(at(119, 59), State::Break { left: 1, .. }));
+        assert_eq!(
+            at(120, 0),
+            running(0, 120 * MINUTE, 2, 60 * MINUTE, Zone::Lesson)
+        );
+        assert_eq!(
+            at(175, 0),
+            running(0, 175 * MINUTE, 2, 5 * MINUTE, Zone::Final)
+        );
+        assert_eq!(at(180, 0), State::Ended { class: 0 });
     }
 
     // ---- several classes ----
@@ -981,7 +1196,7 @@ mod tests {
     fn class_mut_allows_per_class_edits() {
         let mut s = double();
         let c = s.class_mut(MON, 0).unwrap();
-        c.brk = None;
+        *c = c.clone().remove_break(0).unwrap();
         assert!(matches!(
             s.state(MON, hm(9, 50)),
             State::Running { block: 0, .. }

@@ -13,7 +13,7 @@ use crate::strings::{LABEL_AUTOSTART, LABEL_QUIT, LABEL_SAVE_DEFAULT, LABEL_SETT
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Store the break and warning thresholds of the current class as its defaults.
+    /// Store the breaks and warning thresholds of the current class as its defaults.
     SaveDefault,
     /// Open the Settings window.
     Settings,
