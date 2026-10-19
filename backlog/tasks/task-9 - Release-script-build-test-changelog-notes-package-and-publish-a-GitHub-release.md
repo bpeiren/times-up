@@ -3,11 +3,11 @@ id: TASK-9
 title: >-
   Release script: build, test, changelog, notes, package and publish a GitHub
   release
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-15 03:41'
-updated_date: '2026-10-18 05:50'
+updated_date: '2026-10-19 14:27'
 labels: []
 dependencies: []
 modified_files:
@@ -46,20 +46,20 @@ Possible later step: build and publish from GitHub Actions instead of locally, w
 - [x] #3 Build and test gates run first and stop on any failure: cargo fmt --check, clippy -D warnings, cargo test, and the package dependency check
 - [x] #4 The version is bumped in Cargo.toml and Cargo.lock, CHANGELOG.md is generated with git cliff --tag (no Unreleased section), and release notes are generated from the commits plus the hand-written part and the zip's SHA256
 - [x] #5 The zip is built with scripts/package.ps1 including its smoke test, and a .sha256 file is written next to it
-- [ ] #6 Version, changelog and release notes are committed as chore(release): X.Y.Z (signed, retried when the signing agent fails), main is pushed, and the annotated tag vX.Y.Z is created and pushed on that commit; nothing is ever force-pushed
-- [ ] #7 The GitHub release is created from the generated notes with the zip and the checksum file attached, as a draft or pre-release when asked
-- [ ] #8 Afterwards the script downloads the asset without authentication and checks its SHA256 against the local zip and the notes, and checks that the tag points at the release commit
+- [x] #6 Version, changelog and release notes are committed as chore(release): X.Y.Z (signed, retried when the signing agent fails), main is pushed, and the annotated tag vX.Y.Z is created and pushed on that commit; nothing is ever force-pushed
+- [x] #7 The GitHub release is created from the generated notes with the zip and the checksum file attached, as a draft or pre-release when asked
+- [x] #8 Afterwards the script downloads the asset without authentication and checks its SHA256 against the local zip and the notes, and checks that the tag points at the release commit
 - [x] #9 -DryRun does all local work and prints the plan, but stops before any commit, push, tag or release; what to do after a failure at each step (before and after the tag is pushed) is documented
 - [x] #10 The release steps in AGENTS.md and the README are replaced by a short description of the script
 - [x] #11 Release notes are generated into release-notes/vX.Y.Z.md from the commits plus the hand-written part and are committed with the release
-- [ ] #12 The generated release notes are opened in an editor for manual review and the script waits for confirmation before it commits, pushes or publishes anything; declining stops the release without changes
+- [x] #12 The generated release notes are opened in an editor for manual review and the script waits for confirmation before it commits, pushes or publishes anything; declining stops the release without changes
 - [x] #13 The Measured table in the README is refreshed from the package script's measurement (exe and zip size, working set, private memory, CPU) and committed with the release
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 All AC are met.
-- [ ] #2 All code is covered by sensible tests. All tests pass.
+- [x] #1 All AC are met.
+- [x] #2 All code is covered by sensible tests. All tests pass.
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -81,4 +81,14 @@ Possible later step: build and publish from GitHub Actions instead of locally, w
 Verified: scripts/release.tests.ps1 (10 helper tests, pass on pwsh 7 and Windows PowerShell 5.1); parse of all scripts; -DryRun in a throwaway clone whose origin was a local bare repo (all preflight checks passed, gates, bump to 0.0.2, package with smoke test and measurement, changelog, notes, README table, tree restored, no tag/commit/push); preflight failure output on the real worktree. NOT run for real: the signed commit/push/tag, gh release create, the unauthenticated download check (AC 6, 7, 8) and the editor review/confirmation (AC 12, interactive). The first real release should use -Draft (the check then downloads with gh) to see those steps. Design: gates run on the unbumped tree, the dependency check runs inside package.ps1 after the bump; a dry run or declined/failed release restores Cargo.toml, Cargo.lock, CHANGELOG.md, README.md and removes the notes; dry run skips the editor and questions; RELEASE_NOTES.md moved to release-notes/v0.0.1.md; cliff [bump] makes feat bump the patch in 0.x.
 
 Changed after review: the script is a dry run unless -Publish is given (no -DryRun switch any more); -Publish -Unattended releases without the editor and without any question, for automation (the notes are then not reviewed by a person); -Help shows the built-in help. AC 1 and 9 read -DryRun in their text; the dry run is now the default.
+
+Verified after the v0.0.2 release: chore(release): 0.0.2 is a signed commit (G) on main, tag v0.0.2 points at it. Per the TASK-10 split the GitHub release is created by the Release workflow, not the script, so AC 7 and 8 as worded no longer match the design. AC 12 (editor review) is interactive and was not independently verified.
+
+Maintainer confirmed having seen the whole flow work on the 0.0.2 release (editor review, signed commit, tag, download check). AC 7 and 8 were written before the TASK-10 split: the GitHub release is created by the Release workflow and the script waits for it and verifies the download.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+scripts/release.ps1 runs preflight, gates, version bump, changelog, notes, README measurements, editor review and the signed release commit and tag; the Release workflow (TASK-10) publishes. Verified by the maintainer on the real v0.0.2 release, by release.tests.ps1 in CI, and by a hash comparison of the published zip.
+<!-- SECTION:FINAL_SUMMARY:END -->
